@@ -219,7 +219,11 @@ Kanban workers only ever see their own profile's secrets). Terminal settings
 per profile on every routed turn: a profile that omits a terminal key gets the
 documented default, never the launch profile's value, and a profile whose
 `config.yaml`/`.env` cannot be parsed has terminal execution refused rather than
-run under another profile's sandbox policy. Kanban,
+run under another profile's sandbox policy. Authorization is per profile too:
+`GATEWAY_ALLOW_ALL_USERS`, `GATEWAY_ALLOWED_USERS` and every platform allowlist
+or allow-all opt-in are read from the owning profile's `.env` — the default
+profile opting into open access never opens a secondary profile's bot, and a
+secondary that opts in only in its own `.env` is honored. Kanban,
 profile-scoped skills/memory/SOUL, and model routing all behave per-profile
 exactly as they do with separate gateways.
 
