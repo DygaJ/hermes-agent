@@ -183,9 +183,13 @@ class CLIAgentSetupMixin:
         _primary_exc = None
         runtime = None
         try:
+            # target_model: the -m model must drive provider-specific api_mode routing (Bedrock sends
+            # OpenAI models to Mantle, Claude to AnthropicBedrock, the rest to Converse). Without it the
+            # resolver routes from config's default model, so ``-m openai.gpt-5.6-sol --provider
+            # bedrock`` on a Claude-default install lands on Converse and 400s.
             runtime = resolve_runtime_provider(
                 requested=self.requested_provider, explicit_api_key=self._explicit_api_key,
-                explicit_base_url=self._explicit_base_url)
+                explicit_base_url=self._explicit_base_url, target_model=self.model or None)
         except Exception as exc:
             _primary_exc = exc
         if _primary_exc is not None:
@@ -334,7 +338,7 @@ class CLIAgentSetupMixin:
         try:
             runtime = resolve_runtime_provider(
                 requested=self.requested_provider, explicit_api_key=self._explicit_api_key,
-                explicit_base_url=self._explicit_base_url)
+                explicit_base_url=self._explicit_base_url, target_model=self.model or None)
         except Exception:
             return False
         if not isinstance(runtime, dict):
