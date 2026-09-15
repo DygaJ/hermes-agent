@@ -566,7 +566,7 @@ DEFAULT_CONFIG = {
         # micro_compact: opt-in — after each turn fold the oldest un-absorbed exchange into a
         # rolling summary, amortizing compression cost. Off by default because every pass rewrites
         # sent history and breaks the prompt-cache prefix EVERY turn; enable only if the amortized
-        # stall beats the cached-prefix discount. See docs/micro-compaction.md.
+        # stall beats the cached-prefix discount. See website/docs/developer-guide/micro-compaction.md.
         "micro_compact": False,
         # Cadence: run a pass every Nth completed turn (1 = one cache break per turn, 5 = a fifth of
         # the breaks). Clamped >= 1; ignored unless micro_compact is true.
@@ -741,6 +741,10 @@ DEFAULT_CONFIG = {
         # enabled=false skips auto spawns (/refine still works). max_input_tokens caps the SUM of
         # replayed input tokens over the review loop (iterations capped at 16); the loop stops
         # before crossing it. <= 0 = unlimited.
+        # reasoning_effort is IGNORED while the review stays on the main model: the fork inherits the
+        # conversation's reasoning config verbatim so its request bytes keep the parent's warm
+        # prompt-cache prefix (#30532). Set provider/model below to route the review to another model
+        # if you want a different effort level; a one-time warning says so when the key is set.
         "background_review": {"enabled": True, **_aux(120), "max_input_tokens": 600000},
         # No reasoning_effort on MoA blocks by design — configured PER SLOT in the preset
         # (moa.presets.<name>.reference_models[].reasoning_effort / aggregator.reasoning_effort).
@@ -837,6 +841,9 @@ DEFAULT_CONFIG = {
         # fights terminal auto-scroll in non-fullscreen mode.
         # See #45592.
         "cli_refresh_interval": 1.0,
+        # Vi/vim keybindings in the CLI input composer (config-only, no slash command).
+        # Off by default, preserving prompt_toolkit's standard emacs bindings.
+        "vim_mode": False,
         "user_message_preview": {  # CLI: submitted user-message lines echoed to scrollback
             "first_lines": 2,
             "last_lines": 2,
@@ -896,10 +903,11 @@ DEFAULT_CONFIG = {
         # CLI/TUI status bar fields. Non-empty = only listed fields show (built-in order kept,
         # config controls visibility not ordering); empty = default set. Available: model,
         # context_detail, context_pct, cache_hit, latency, tps, compressions, bg_tasks,
-        # bg_processes, bg_subagents, goal, duration, prompt_elapsed, idle_since, focus, yolo,
-        # stash, battery, title, plus two opt-in only fields: limits (Codex + Claude Code
-        # subscription usage: shortest window per account plus per-model weekly caps, polled every 60s) and total_tokens
-        # (session Σ). Narrow terminals still drop context_detail/prompt_elapsed/idle_since.
+        # bg_processes, bg_subagents, goal, git_branch (⎇ current branch, opt-in only), duration,
+        # prompt_elapsed, idle_since, focus, yolo, stash, battery, title, plus two more opt-in only
+        # fields: limits (Codex + Claude Code subscription usage: shortest window per account plus
+        # per-model weekly caps, polled every 60s) and total_tokens (session Σ). Narrow terminals
+        # still drop context_detail/prompt_elapsed/idle_since.
         "status_bar": {
             "fields": [],
         },
@@ -1348,6 +1356,10 @@ DEFAULT_CONFIG = {
         "project_discovery": True,
         # Trusted project roots; managed by `hermes skills trust` / `untrust`.
         "trusted_project_dirs": [],
+        # Skill names pinned as fully loaded in every new session (CLI, TUI, gateway, cron, API).
+        # Resolved once when the agent's prompt is first built; missing/disabled names warn and
+        # skip; HERMES_IGNORE_RULES suppresses the list like the other auto-injected context.
+        "auto_load": [],
         # Substitute ${HERMES_SKILL_DIR} / ${HERMES_SESSION_ID} in SKILL.md content.
         "template_vars": True,
         # Pre-execute !`cmd` snippets in SKILL.md, inlining stdout (dates, git state...). Off:
@@ -1447,6 +1459,9 @@ DEFAULT_CONFIG = {
         "websocket_liveness_failure_threshold": 2,
         "websocket_heartbeat_ack_max_age_seconds": 60,
         "websocket_max_latency_seconds": 30,
+        # Dispatch-side dimension: a socket that ACKs heartbeats but delivers no events for this
+        # long is treated as deaf. 4 h absorbs a quiet server overnight; 0 disables it.
+        "websocket_event_max_silence_seconds": 14400,
         # per-channel ephemeral system prompts (forum parents apply to child threads)
         "channel_prompts": {},
         # Opt-in DM role auth: DISCORD_ALLOWED_ROLES normally authorizes guild messages only (DMs
@@ -1509,6 +1524,9 @@ DEFAULT_CONFIG = {
             # Experimental rich draft previews while streaming DMs; off because Telegram
             # Desktop/macOS can overlay draft frames until the chat redraws.
             "rich_drafts": False,
+            # CJK stays on legacy MarkdownV2 (Telegram Desktop/macOS garbles rich CJK, #47653);
+            # set True on an unaffected client to get native rich tables for CJK.
+            "allow_cjk_rich_messages": False,
         },
     },
 
@@ -1719,6 +1737,9 @@ DEFAULT_CONFIG = {
         # kanban_create is called from a session with a persistent delivery channel. Disable for
         # profiles that prefer explicit kanban_notify-subscribe calls per task.
         "auto_subscribe_on_create": True,
+        # Poll and deliver Kanban subscriptions from this gateway. Disable on profiles that do
+        # not own notification subscriptions to avoid an idle five-second board probe.
+        "notify_in_gateway": True,
         # Run the dispatcher inside the gateway process (~300µs per idle tick). False only if you
         # run it as a separate unit or don't want the gateway spawning workers.
         "dispatch_in_gateway": True,
@@ -1758,6 +1779,12 @@ DEFAULT_CONFIG = {
         # fan-out workflows that would otherwise saturate one profile's local model / API quota / browser
         # pool while leaving other profiles idle. See #21582.
         "max_in_progress_per_profile": None,
+        # Per-home claim allowlist for boards shared across Hermes homes (#110995): profile names
+        # this home's dispatcher may claim (list or comma-separated string). None = any existing
+        # profile is claimable. Set = fail-closed (an empty list claims nothing). Every home has a
+        # root profile named "default", so on a shared kanban.db every home can otherwise claim
+        # default-assigned cards.
+        "dispatch_profiles": None,
         # Auto-run the decomposer on Triage tasks every tick. False = manual via `hermes kanban
         # decompose <id>` or the dashboard's Decompose button.
         "auto_decompose": True,
@@ -1935,6 +1962,8 @@ DEFAULT_CONFIG = {
         "loop_watchdog_probe_interval_s": 30.0,
         "loop_watchdog_probe_timeout_s": 10.0,
         "loop_watchdog_max_strikes": 3,
+        # Allow all users without allowlists (security opt-in).
+        "allow_all_users": False,
         # Bot-to-bot loop guard: admitted bot messages per conversation before a cooldown.
         "bot_loop_guard": {"enabled": True, "max_events": 20, "window_seconds": 300, "cooldown_seconds": 600},
         # Startup-liveness watchdog: stdlib-only daemon thread armed at process entry that
@@ -1947,6 +1976,26 @@ DEFAULT_CONFIG = {
         # (primary copy: state.db gateway_routing table). True for external tooling and downgrade
         # safety; False stops producing the file.
         "write_sessions_json": True,
+        # One gateway for every profile on this host: the DEFAULT profile's gateway also connects
+        # each named profile's bots (their own .env / config.yaml, per-profile secret scope) and
+        # stamps the profile into session keys. Flip with `hermes gateway migrate --multiplex`
+        # (records a rollback manifest; `--standalone` undoes it) or `hermes config set
+        # gateway.multiplex_profiles true` + `hermes gateway restart`. GATEWAY_MULTIPLEX_PROFILES
+        # in the environment overrides. Two profiles configuring the same bot token cannot be
+        # served together — the duplicate adapter is parked; `hermes profile create --clone`
+        # therefore leaves messaging channels behind unless --clone-channels is passed.
+        "multiplex_profiles": False,
+        # May `hermes update` fold this install onto a multiplexed default gateway by itself?
+        # True (the default) keeps today's behaviour: a multi-profile install whose secondaries run
+        # their own gateways is migrated automatically after an update when nothing blocks it.
+        # Set to False to stay on per-profile gateways — a durable opt-out that survives updates, so
+        # the decision is not re-litigated on every release. Only the AUTOMATIC path reads this:
+        # `hermes gateway migrate --multiplex` is an explicit request and always proceeds.
+        "auto_multiplex_migration": True,
+        # Route inbound chats of the default profile's bots to another profile
+        # (gateway/profile_routing.py): [{profile, platform, chat_id|user_id|guild_id|...}].
+        # Most-specific match wins; only read by the multiplexing default gateway.
+        "profile_routes": [],
         # Scale-to-zero idle TIMEOUT only. When an instance is opted in via the NAS "Labs" toggle
         # (HERMES_SCALE_TO_ZERO env stamp) AND messaging is relay-only/absent AND a wakeUrl is
         # registered, the relay transport goes dormant so the platform (e.g. Fly autostop) can
@@ -2089,7 +2138,7 @@ DEFAULT_CONFIG = {
     },
     # Privacy-safe aggregate metrics in this profile's local telemetry dir. Collection (`enabled`)
     # and transmission to Nous (`send`) are SEPARATE opt-ins; see
-    # docs/observability/relay-shared-metrics.md Appendix A for consent/retention.
+    # website/docs/developer-guide/relay-shared-metrics.md Appendix A for consent/retention.
     "telemetry": {
         "shared_metrics": {
             "enabled": False,
@@ -2301,6 +2350,10 @@ DEFAULT_CONFIG = {
         "extra_allowed_hosts": [],
     },
     "desktop": {  # Hermes Desktop (Electron) launch options; only affect `hermes desktop`.
+        # CSS font-family for the app's chat and UI text (e.g. "OpenDyslexic"). Layered in front
+        # of the active theme's own sans stack so missing glyphs still fall through. Empty = the
+        # theme's face. The terminal pane is terminal.font_family.
+        "font_family": "",
         # Git repo discovery for the Projects sidebar; empty roots = bounded scan of $HOME.
         "repo_scan_enabled": True,
         "repo_scan_roots": [],
@@ -2376,7 +2429,7 @@ DEFAULT_CONFIG = {
         # Off = detection-only (Hermes still finds an external llama-server you run).
         "enabled": False,
         # Pinned llama.cpp release tag; bumped by Hermes releases after validation.
-        "tag": "b10679",
+        "tag": "b10964",
         # auto = CUDA on NVIDIA, Metal on macOS, Vulkan on other GPUs, else CPU. Explicit:
         # cuda|metal|vulkan|hip|cpu.
         "backend": "auto",
@@ -2385,7 +2438,7 @@ DEFAULT_CONFIG = {
         # Extra ports detection probes for an external llama-server (besides 8080).
         "detect_ports": [],
     },
-    "_config_version": 44,  # Config schema version - bump this when adding new required fields
+    "_config_version": 45,  # Config schema version - bump this when adding new required fields
 }
 
 
