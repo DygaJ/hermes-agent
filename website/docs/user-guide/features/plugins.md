@@ -203,7 +203,11 @@ repositories too, through the same stored credentials described below.
 
 `hermes plugins install` clones non-interactively (it never prompts for a
 username or password), so a private repo needs a credential Hermes can find on
-its own. For an `https://` source it tries, in order:
+its own. Every clone, pinned `--ref` fetch and `hermes plugins update` pull is
+attempted anonymously first — public repos never see your credential, so a
+stale or revoked token cannot break a public install. Only when the remote
+refuses anonymous access does Hermes look for a credential. For an `https://`
+source it tries, in order:
 
 1. `GITHUB_TOKEN` or `GH_TOKEN` from your `.env` (GitHub hosts only).
 2. The `gh` CLI's login (`gh auth login`), GitHub hosts only.
@@ -693,6 +697,11 @@ there is capped at **caution**: their fixtures deliberately hold hostile
 strings to prove the plugin rejects them, so it asks for confirmation and
 `--force` overrides it instead of blocking the install outright. The same
 finding in any other file (`setup.sh`, `src/spec/…`) is still **dangerous**.
+Likewise, a generic sample token (`hardcoded_secret`) inside a runtime `.py`
+file's `if __name__ == "__main__":` self-test block is capped at **caution**
+— the loader imports plugins and never runs that block — while every other
+finding inside it (destructive commands, provider-shaped keys such as `sk-…`)
+and the same token anywhere above the guard keep full severity.
 
 Scanning is on by default; disable it in `config.yaml`:
 

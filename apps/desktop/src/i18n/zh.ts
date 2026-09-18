@@ -289,9 +289,11 @@ export const zh = defineLocale({
     },
     native: {
       approvalTitle: '需要批准',
+      approvalTitleNamed: session => `需要批准 — ${session}`,
       approveAction: '批准',
       rejectAction: '拒绝',
       inputTitle: '需要输入',
+      inputTitleNamed: session => `需要输入 — ${session}`,
       inputBody: 'Hermes 正在等待你的回应。',
       turnDoneTitle: 'Hermes 已完成',
       turnDoneBody: '',
@@ -1202,6 +1204,29 @@ export const zh = defineLocale({
       attachmentSizeLabel: '预览 / 图片加载大小上限（MB）',
       showOptions: '显示选项'
     },
+    screenshot: {
+      enabledTitle: '截图快捷键',
+      enabledDesc:
+        '在任意应用中同时按下左右两个 Command 键，即可截取最前面的窗口并附加到当前 Hermes 草稿。绝不会自动发送。默认关闭，仅适用于这台 Mac。窗口可能包含敏感内容，请在发送前检查附件。',
+      statusTitle: '截图快捷键状态',
+      checking: '正在检查截图快捷键…',
+      disabled: '截图快捷键已关闭。',
+      starting: '正在启动快捷键监听，尚未就绪。',
+      ready: '快捷键已就绪。截图会附加到当前草稿，不会发送。',
+      inputPermission:
+        '输入监控权限允许 Hermes 在其他应用处于活动状态时检测两个 Command 键。请在系统设置 → 隐私与安全性 → 输入监控中允许 Hermes，然后返回此处重试。',
+      screenPermission:
+        '屏幕录制权限允许 Hermes 在你使用此快捷键时截取最前面的应用窗口。请在系统设置 → 隐私与安全性 → 屏幕录制中允许 Hermes，然后返回此处重试。如果 macOS 提示，请重启 Hermes。',
+      openSettings: '打开系统设置',
+      retry: '重试',
+      unavailable: '截图快捷键不可用。请重试或将其关闭。',
+      errorTitle: '截图快捷键错误',
+      loadFailed: '无法读取快捷键状态。请重试以检查当前设置。',
+      saveFailed: '无法确认快捷键更改。请重试以检查当前设置。',
+      permissionFailed: '无法打开系统设置。请手动打开“隐私与安全性”，然后重试。',
+      captureFailed: '无法截取最前面的窗口。未附加或发送任何内容。',
+      contextChanged: '截图期间当前草稿发生了变化。截图未附加或发送。'
+    },
     quickEntry: {
       enabledTitle: '快速输入',
       enabledDesc: '用全局快捷键在任何地方唤出一个小输入框，无需打开 Hermes 即可发送提示。',
@@ -1580,7 +1605,11 @@ export const zh = defineLocale({
       notInCatalog: '不在该提供方的模型列表中 — 调用可能回退到备用模型。',
       moaTitle: '混合智能体（Mixture of Agents）',
       moaPreset: '预设',
+      moaDescription:
+        '配置以「混合智能体」提供商下模型形式出现的命名预设。聚合模型是执行模型——它运行工具循环的每一步，整个运行几乎全部费用都计入其提供商。参考模型默认每轮用户消息仅提供一次建议。',
       moaAggregator: '聚合模型',
+      moaAggregatorBilled: '执行模型 · 整个运行在此计费',
+      moaReferenceHint: '默认每轮仅建议一次',
       tasks: {
         vision: { label: '视觉', hint: '图片分析' },
         compression: { label: '压缩', hint: '上下文压缩' },
@@ -1835,7 +1864,11 @@ export const zh = defineLocale({
         selectedTitle: '已选择后端',
         selectedMessage: backend => `终端命令现在通过 ${backend} 运行。将应用于新会话。`,
         failedSelect: backend => `选择 ${backend} 失败`,
-        needsSetupHint: '现在即可选择此后端——但在完成设置前命令将会失败。'
+        needsSetupHint: '此后端已选中但尚未完成设置——在设置完成前命令将会失败。',
+        needsSetupConfirmTitle: backend => `仍要选择 ${backend} 吗？`,
+        needsSetupConfirmDescription: detail => `${detail} 此更改生效后启动的会话在设置完成前将没有终端或文件工具。`,
+        needsSetupConfirmDescriptionGeneric: '此后端尚未完成设置。此更改生效后启动的会话在设置完成前将没有终端或文件工具。',
+        needsSetupConfirmAction: '仍然选择'
       },
       browserRealProfile: {
         label: '使用我的真实浏览器配置文件',
@@ -1935,6 +1968,8 @@ export const zh = defineLocale({
         '此配置未安装 agent 部分，且该包是手动复制的（无目录条目或 git 远程），无法从此处安装。请将其文件夹复制到该配置或从 Git 重新安装。',
       desktopHalfPending: '复制中…',
       desktopHalfPendingTip: '此包附带的桌面部分尚未复制到应用中。请重新扫描或重启应用。',
+      desktopHalfRemote: '不可用（远程后端）',
+      desktopHalfRemoteTip: '此包的桌面部分位于远程后端的磁盘上，本应用无法读取。要在此使用，请通过“从 Git 安装”输入该包的仓库地址并勾选桌面目标，即可将桌面部分克隆到本机。',
       emptyAll: '还没有插件。',
       empty: '此配置尚未安装任何 agent 插件。',
       emptyHint: '在下方目录中浏览，一键安装经过审核的插件。',
@@ -2974,6 +3009,7 @@ export const zh = defineLocale({
       enter: label => `打开 ${label}`,
       reorder: label => `重新排序 ${label}`,
       toggle: (label, open) => `${open ? '展开' : '收起'} ${label} 会话`,
+      showAllCount: count => `显示全部 ${count} 个会话`,
       back: '全部项目'
     },
     newSessionIn: label => `在 ${label} 中新建会话`,
@@ -3397,6 +3433,7 @@ export const zh = defineLocale({
     notAvailableTitle: '更新不可用',
     unsupportedMessage: '此版本的 Hermes 无法在应用内自行更新。',
     connectionRetry: '请检查网络连接后重试。',
+    gitUnusable: 'Hermes 无法在这台电脑上运行 Git，因此无法检查更新。',
     latestBody: '你正在运行最新版本。',
     latestBodyBackend: '后端正在运行最新版本。',
     allSetTitle: '已是最新',
@@ -3840,6 +3877,8 @@ export const zh = defineLocale({
     openFolder: '打开文件夹',
     refreshTree: '刷新文件树',
     collapseAll: '折叠所有文件夹',
+    showIgnored: '显示 gitignore 的文件',
+    hideIgnored: '隐藏 gitignore 的文件',
     previewUnavailable: '预览不可用',
     couldNotPreview: path => `无法预览 ${path}`,
     noProjectTitle: '没有项目',
@@ -4335,7 +4374,13 @@ export const zh = defineLocale({
     cwdChangeFailed: '工作目录更改失败',
     cwdStagedTitle: '工作目录已暂存',
     cwdStagedMessage: '重启桌面后端后，工作目录更改才会应用到当前活跃会话。',
+    modelSwitchConfirmBody: '此模型切换需要确认。',
+    modelSwitchConfirmLabel: '仍然切换',
+    modelSwitchConfirmTitle: (model: string) => `切换到 ${model}？`,
+    modelSwitchConfirmTitleFallback: '切换模型？',
     modelSwitchFailed: '模型切换失败',
+    modelSwitchKeepLabel: '保留当前模型',
+    modelSwitchStaleNotice: '选择已更改 — 未应用模型切换。',
     hydrationSyncing: (profile: string) => `正在同步 ${profile}\u2026`,
     sessionExported: '会话已导出',
     sessionExportFailed: '无法导出会话',

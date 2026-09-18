@@ -229,7 +229,7 @@ export function appViewForPath(pathname: string): AppView {
 /** Does `to` land on a full page rendered INSIDE the workspace pane
  *  (skills/messaging/artifacts/contributed routes)? Overlays don't count —
  *  they float over whatever the workspace is already showing. */
-function isWorkspacePageRoute(to: string): boolean {
+export function isWorkspacePageRoute(to: string): boolean {
   const view = appViewForPath(to)
 
   return view !== 'chat' && !isOverlayView(view)
@@ -241,6 +241,12 @@ function isWorkspacePageRoute(to: string): boolean {
  *  it as `headerVeto` so the zone tab bar stands down on pages. Overlays
  *  (settings/…) don't count — the chat stays beneath them. */
 export const $workspaceIsPage = atom(false)
+
+/** Page-owned controls (kanban's board switcher) projected into the workspace
+ *  panel's tab-header space while `$workspaceIsPage` holds — the page's title
+ *  row, not the native band. Distinct from `titleBar.*`, whose slots stay
+ *  mounted on every route so plugin components never remount on navigation. */
+export const WORKSPACE_PAGE_HEADER_AREA = 'workspace.pageHeader'
 
 function revealWorkspacePane(): void {
   noteActiveTreeGroup(null)

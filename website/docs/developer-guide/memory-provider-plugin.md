@@ -114,7 +114,7 @@ fields; callers may initialize a provider without an agent or a session database
 | `gateway_session_key` | Stable messaging-chat identity for per-chat session isolation. |
 | `user_id`, `user_id_alt`, `user_name`, `chat_id` | Gateway identity fields, included when present. |
 | `agent_identity` | Active profile name, when available. |
-| `agent_workspace`, `agent_context` | Runtime agent scope (`hermes` and `primary` for the main agent). |
+| `agent_workspace`, `agent_context` | Runtime agent scope. `agent_workspace` is `hermes`; `agent_context` is `cron` for scheduler runs, `subagent` for `delegate_task` children, else `primary` — skip automatic writes for the non-primary values. |
 
 Do not assume `os.getcwd()` identifies the conversation's workspace: one Desktop
 or gateway backend can serve several sessions. If `cwd` is absent and directory
@@ -241,6 +241,23 @@ digest) and upsert, so retries and overlaps deduplicate instead of
 accumulating duplicate archives.
 
 Contract tests: `tests/agent/test_pre_compress_checkpoint_contract.py`.
+
+## Setup UX — what a standalone provider keeps
+
+Every setup surface Hermes gives a bundled provider is driven by files in the provider's
+own directory, so a provider installed from the plugin catalog keeps all of them:
+
+| Surface | What the provider ships |
+|---|---|
+| Desktop → Capabilities → Tools → Memory (config panel) | `config_schema.py` (below) |
+| `hermes memory setup` wizard | `get_config_schema()` declares the fields the wizard prompts for, `save_config(config, hermes_home)` persists them, `post_setup(hermes_home, config)` runs afterwards for anything interactive (OAuth, first sync); `get_status_config()` feeds `hermes memory status` |
+| `hermes <provider> …` subcommands | `cli.py` with `register_cli(subparser)` ([Adding CLI Commands](#adding-cli-commands)) |
+| Python dependencies | `pyproject.toml` `[project] dependencies` (or `python_dependencies` in `plugin.yaml`); installed under Hermes' own pins at install time and re-applied across `hermes update` |
+
+Your provider's name, `memory.<name>` config section, data directory and tool names are the
+contract with existing users. A provider that moves out of core keeps all four; Hermes then
+installs the catalog plugin automatically for anyone whose `memory.provider` still names it
+(on `hermes update`, and once at agent start when `security.allow_lazy_installs` is on).
 
 ## Config Schema
 

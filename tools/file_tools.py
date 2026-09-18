@@ -19,7 +19,9 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from agent.file_safety import get_nt_namespace_error, get_read_block_error
+from agent.tool_result_classification import GUARDRAIL_REFUSAL_KEY
 from tools.binary_extensions import has_binary_extension
+from tools.skill_provenance import is_background_review
 from tools.file_operations import (
     ShellFileOperations, normalize_read_pagination, normalize_search_pagination)
 from tools.file_operations_common import DEFAULT_READ_LIMIT
@@ -502,7 +504,11 @@ def _dedup_stub_or_block(task_data: dict, dedup_key: tuple, path: str) -> str:
             "still current. Proceed with your task using "
             "the information you already have.",
             path=path,
-            already_read=hits + 1)
+            already_read=hits + 1,
+            # A REFUSAL the harness chose, not a failure the tool hit: without the
+            # marker the failure classifiers count the block and a repeated read
+            # escalates to `repeated_exact_failure_block` over calls that never failed.
+            **{GUARDRAIL_REFUSAL_KEY: True})
 
     return json.dumps({
         "status": "unchanged",
@@ -639,7 +645,9 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
             # First unchanged read after a compaction boundary serves full content
             # (the summary may have dropped exact bytes); later ones get the stub.
             content_served_in_generation = dedup_key in task_data["dedup_generation_reads"]
-        if cached_mtime is not None:
+        # Same rule as skill_view: the review fork shares the parent's task_id and its
+        # read-before-write guard needs a real read, which the stub path never records (#95976).
+        if cached_mtime is not None and not is_background_review():
             try:
                 if os.path.getmtime(resolved_str) == cached_mtime and content_served_in_generation:
                     return _dedup_stub_or_block(task_data, dedup_key, path)
@@ -695,7 +703,8 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
                 "The content has NOT changed. You already have this information. "
                 "STOP re-reading and proceed with your task.",
                 path=path,
-                already_read=count)
+                already_read=count,
+                **{GUARDRAIL_REFUSAL_KEY: True})
         if count >= 3:
             result_dict["_warning"] = (
                 f"You have read this exact file region {count} times consecutively. "
@@ -1010,7 +1019,8 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
                 "The results have NOT changed. You already have this information. "
                 "STOP re-searching and proceed with your task.",
                 pattern=pattern,
-                already_searched=count)
+                already_searched=count,
+                **{GUARDRAIL_REFUSAL_KEY: True})
 
         # Raw string before _resolve_path_for_task: resolving is the NTLM-leak
         # trigger and the task-base join would hide the prefix (see read_file_tool).
@@ -1291,8 +1301,13 @@ def _handle_search_files(args, **kw):
     target_map = {"grep": "content", "find": "files"}
     raw_target = args.get("target", "content")
     target = target_map.get(raw_target, raw_target)
+    # The schema documents path='.'; a present-but-blank (or JSON null) value
+    # is not a missing key for dict.get, so apply the default here (#112424).
+    path = args.get("path", ".")
+    if path is None or (isinstance(path, str) and not path.strip()):
+        path = "."
     return search_tool(
-        pattern=args.get("pattern", ""), target=target, path=args.get("path", "."),
+        pattern=args.get("pattern", ""), target=target, path=path,
         file_glob=args.get("file_glob"), limit=args.get("limit", 50), offset=args.get("offset", 0),
         output_mode=args.get("output_mode", "content"), context=args.get("context", 0),
         order=args.get("order", "discovery"), task_id=tid)

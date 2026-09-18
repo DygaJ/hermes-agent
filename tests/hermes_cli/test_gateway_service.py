@@ -816,6 +816,58 @@ class TestLaunchdDomainDetection:
         assert domain == "user/501"
 
 
+class TestLaunchdUnsupportedFallbackPolicy:
+    """A 5/125 launchctl exit must not brand a domain the host is demonstrably managing.
+
+    Regression for the recurrence where ``hermes gateway install --force`` over the LIVE job
+    returned EIO (5) — launchctl's answer for an already-loaded label — which
+    ``_launchd_degrade_or_raise`` read as "this macOS cannot manage launchd services". It wrote the
+    permanent launchd-unsupported marker and started a detached gateway beside the supervised one,
+    and the marker made ``wait_for_launchd_gateway_supervision()`` answer True unconditionally, so
+    no later install/update could see that nothing tied the gateway to launchd any more.
+    """
+
+    def _spy_fallback(self, monkeypatch):
+        """Record the two side effects of degrading; return the lists."""
+        marker_writes, spawned = [], []
+        monkeypatch.setattr(
+            gateway_cli, "_write_launchd_unsupported_marker", lambda: marker_writes.append("marker")
+        )
+        monkeypatch.setattr(
+            gateway_cli, "_spawn_detached_gateway", lambda: spawned.append("detached") or True
+        )
+        return marker_writes, spawned
+
+    def test_eio_on_a_supervised_label_does_not_degrade_to_detached(self, monkeypatch):
+        exc = subprocess.CalledProcessError(
+            5, ["launchctl", "bootstrap"], stderr="Bootstrap failed: 5: Input/output error"
+        )
+        monkeypatch.setattr(gateway_cli, "get_launchd_label", lambda: "ai.hermes.gateway")
+        monkeypatch.setattr(
+            gateway_cli, "_launchctl_label_supervising_process", lambda label: True
+        )
+        marker_writes, spawned = self._spy_fallback(monkeypatch)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            gateway_cli._launchd_degrade_or_raise(exc, "launchctl bootstrap")
+
+        assert marker_writes == [], "a supervised job's domain must not be branded unsupported"
+        assert spawned == [], "no detached gateway beside a supervised one"
+
+    def test_eio_without_a_supervised_process_still_falls_back(self, monkeypatch):
+        """The detached fallback for a domain that really cannot manage the job is unchanged."""
+        exc = subprocess.CalledProcessError(125, ["launchctl", "kickstart"])
+        monkeypatch.setattr(gateway_cli, "get_launchd_label", lambda: "ai.hermes.gateway")
+        monkeypatch.setattr(
+            gateway_cli, "_launchctl_label_supervising_process", lambda label: False
+        )
+        marker_writes, spawned = self._spy_fallback(monkeypatch)
+
+        gateway_cli._launchd_degrade_or_raise(exc, "launchctl kickstart")
+
+        assert marker_writes == ["marker"]
+        assert spawned == ["detached"]
+
 class TestGatewayServiceDetection:
     def test_supports_systemd_services_requires_systemctl_binary(self, monkeypatch):
         monkeypatch.setattr(gateway_cli, "is_linux", lambda: True)
@@ -1864,6 +1916,58 @@ class TestDockerAwareGateway:
         out = capsys.readouterr().out
         assert "Docker" in out or "docker" in out
         assert "restart" in out.lower()
+
+    def test_install_in_systemd_container_refuses_user_scope(self, monkeypatch, capsys):
+        """A bind-mounted home must not receive a host-visible user unit."""
+        monkeypatch.setattr(gateway_cli, "is_managed", lambda: False)
+        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
+        monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
+        monkeypatch.setattr(gateway_cli, "is_container", lambda: True)
+        monkeypatch.setattr(
+            gateway_cli,
+            "_install_systemd_from_cli",
+            lambda *args, **kwargs: pytest.fail("must not install a user unit in a container"),
+        )
+
+        args = SimpleNamespace(gateway_command="install", force=False, system=False, run_as_user=None)
+        with pytest.raises(SystemExit) as exc_info:
+            gateway_cli.gateway_command(args)
+
+        assert exc_info.value.code == 1
+        out = capsys.readouterr().out
+        assert "--system" in out
+        assert "user-scope" in out
+
+    def test_install_in_systemd_container_keeps_explicit_system_scope(self, monkeypatch):
+        """Explicit system installs stay available for systemd-managed containers."""
+        monkeypatch.setattr(gateway_cli, "is_managed", lambda: False)
+        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
+        monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
+        monkeypatch.setattr(gateway_cli, "is_container", lambda: True)
+        calls = []
+        monkeypatch.setattr(
+            gateway_cli,
+            "_install_systemd_from_cli",
+            lambda *args, **kwargs: calls.append(kwargs),
+        )
+
+        args = SimpleNamespace(gateway_command="install", force=False, system=True, run_as_user=None)
+        gateway_cli.gateway_command(args)
+
+        assert calls == [{"force": False, "system": True, "run_as_user": None}]
+
+    def test_setup_wizard_user_scope_in_container_skips_install(self, monkeypatch, capsys):
+        """The wizard's default "user service" choice is the same host-visible unit (#112323):
+        inside a container it prints the guidance and reports no install instead of writing it."""
+        monkeypatch.setattr(gateway_cli, "is_container", lambda: True)
+        monkeypatch.setattr(gateway_cli, "prompt_linux_gateway_install_scope", lambda: "user")
+        monkeypatch.setattr(
+            gateway_cli, "systemd_install",
+            lambda **kwargs: pytest.fail("must not install a user unit in a container"),
+        )
+
+        assert gateway_cli.install_linux_gateway_from_setup(force=False, enable_on_startup=True) == ("user", False)
+        assert "--system" in capsys.readouterr().out
 
 
 class TestLegacyHermesUnitDetection:
