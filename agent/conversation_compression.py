@@ -3383,6 +3383,19 @@ def _finish_compaction_boundary(
                 },
             )
 
+    with _swallow('on_compaction_complete hook error: %s'):
+        from hermes_cli.lifecycle import invoke_hook
+        invoke_hook(
+            "on_compaction_complete",
+            session_id=agent.session_id or "",
+            old_session_id=_old_sid or "",
+            in_place=in_place,
+            compression_count=compressor.compression_count,
+            runtime="chat_completions",
+            platform=agent.platform or "",
+            agent=agent,
+        )
+
     # Rotation-independent flag: the gateway uses it (not an id diff) to re-baseline
     # transcript handling (history_offset=0 + rewrite on the same id) in-place.
     agent._last_compression_attempt_in_place = compacted_in_place

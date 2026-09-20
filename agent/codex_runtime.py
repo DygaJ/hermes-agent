@@ -227,8 +227,32 @@ def _record_codex_app_server_compaction(agent, turn, *, approx_tokens: int | Non
             from agent.conversation_compression import COMPACTION_STATUS
             agent._emit_status(COMPACTION_STATUS)
     compressor = getattr(agent, "context_compressor", None)
+    unaccounted = 0
+    if force:
+        # If this forced compaction's own compact turn already reported itself
+        # via the mid-turn on_compaction callback, avoid double-counting it.
+        compact_turn_seen = getattr(turn, "compaction_count", 0)
+        if compressor is not None:
+            turn_already_seen = getattr(compressor, "_codex_turn_compaction_seen", 0)
+            if compact_turn_seen > 0 and turn_already_seen >= compact_turn_seen:
+                unaccounted = 0
+            else:
+                unaccounted = 1
+                compressor.compression_count = getattr(compressor, "compression_count", 0) + 1
+            compressor._codex_turn_compaction_seen = 0
+        else:
+            unaccounted = 1
+    else:
+        increment = getattr(turn, "compaction_count", 0)
+        if increment <= 0:
+            increment = 1
+        if compressor is not None:
+            turn_already_seen = getattr(compressor, "_codex_turn_compaction_seen", 0)
+            unaccounted = max(0, increment - turn_already_seen)
+            if unaccounted > 0:
+                compressor.compression_count = getattr(compressor, "compression_count", 0) + unaccounted
+            compressor._codex_turn_compaction_seen = 0
     if compressor is not None:
-        compressor.compression_count = getattr(compressor, "compression_count", 0) + 1
         compressor.last_compression_rough_tokens = approx_tokens or 0
         # Codex owns this summary: a prior Hermes deterministic-fallback flag must not leak into it.
         record_boundary = getattr(type(compressor), "record_completed_compaction", None)
@@ -249,6 +273,23 @@ def _record_codex_app_server_compaction(agent, turn, *, approx_tokens: int | Non
                       "compression_count": getattr(compressor, "compression_count", 0) if compressor is not None else 0,
                       "runtime": "codex_app_server", "thread_id": thread_id, "turn_id": turn_id,
                   }))
+    # Only invoke on_compaction_complete if there are new unaccounted compactions (e.g. force=True or
+    # native compactions not already emitted mid-turn via _on_codex_app_server_compaction_event).
+    if unaccounted > 0:
+        with suppress(Exception):
+            from hermes_cli.lifecycle import invoke_hook
+            invoke_hook(
+                "on_compaction_complete",
+                session_id=getattr(agent, "session_id", None) or "",
+                old_session_id="",
+                in_place=False,
+                compression_count=getattr(compressor, "compression_count", 0) if compressor is not None else 0,
+                runtime="codex_app_server",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                platform=getattr(agent, "platform", None) or "",
+                agent=agent,
+            )
     return True
 
 
@@ -459,6 +500,34 @@ def _codex_developer_instructions(agent) -> str:
     return developer_instructions
 
 
+def _on_codex_app_server_compaction_event(agent, count: int) -> None:
+    """Mid-turn compaction callback from CodexAppServerSession: invoke on_compaction_complete."""
+    compressor = getattr(agent, "context_compressor", None)
+    if compressor is not None:
+        last_seen = getattr(compressor, "_codex_turn_compaction_seen", 0)
+        delta = count - last_seen
+        if delta > 0:
+            compressor.compression_count = getattr(compressor, "compression_count", 0) + delta
+            compressor._codex_turn_compaction_seen = count
+        total_count = getattr(compressor, "compression_count", 0)
+    else:
+        total_count = count
+    session_id = getattr(agent, "session_id", None) or ""
+    platform = getattr(agent, "platform", None) or ""
+    with suppress(Exception):
+        from hermes_cli.lifecycle import invoke_hook
+        invoke_hook(
+            "on_compaction_complete",
+            session_id=session_id,
+            old_session_id="",
+            in_place=False,
+            compression_count=total_count,
+            runtime="codex_app_server",
+            platform=platform,
+            agent=agent,
+        )
+
+
 def _ensure_codex_session(agent) -> None:
     """Lazily spawn one CodexAppServerSession per AIAgent (reused across turns, closed by the _cleanup hook).
     A live session whose thread was started with a different prompt composition (TUI/Desktop ``/personality``
@@ -511,6 +580,7 @@ def _ensure_codex_session(agent) -> None:
         on_event=make_codex_app_server_event_bridge(agent),
         developer_instructions=developer_instructions or None,
         model=getattr(agent, "model", None) if model_provider else None, model_provider=model_provider,
+        on_compaction=lambda count: _on_codex_app_server_compaction_event(agent, count),
     )
 
 
@@ -572,7 +642,8 @@ def _finish_codex_turn(agent, turn, messages: List[Dict[str, Any]], *, original_
 
 
 def run_codex_app_server_turn(agent, *, user_message: str, original_user_message: Any, messages: List[Dict[str, Any]],
-                              effective_task_id: str, should_review_memory: bool = False) -> Dict[str, Any]:
+                              effective_task_id: str, should_review_memory: bool = False,
+                              plugin_user_context: str | None = None) -> Dict[str, Any]:
     """Hand the turn to a ``codex app-server`` subprocess and project its events into ``messages``.
     Returns the chat_completions result shape. The user message is ALREADY in ``messages`` — never append it again."""
     # Defense in depth for compression.checkpoint_required: agent init refuses the combination, but
@@ -582,10 +653,19 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
         raise _checkpoint_blocked("codex_app_server owns the authoritative thread and compacts it "
                                   "without a truthful pre-compaction transcript boundary")
     _ensure_codex_session(agent)
+    effective_input = user_message
+    if plugin_user_context and plugin_user_context.strip():
+        if isinstance(user_message, str):
+            effective_input = f"{user_message}\n\n{plugin_user_context.strip()}"
+        elif isinstance(user_message, list):
+            effective_input = list(user_message) + [{"type": "text", "text": plugin_user_context.strip()}]
     try:
-        turn = agent._codex_session.run_turn(user_input=user_message)
+        turn = agent._codex_session.run_turn(user_input=effective_input)
     except Exception as exc:
         logger.exception("codex app-server turn failed")
+        compressor = getattr(agent, "context_compressor", None)
+        if compressor is not None:
+            compressor._codex_turn_compaction_seen = 0
         _close_codex_session(agent)
         return _turn_result(
             _consume_user_interrupt(agent), messages, api_calls=0, completed=False, error=str(exc),

@@ -459,6 +459,7 @@ Payload fields below are the exact event-specific fields supplied by each call s
 | `on_session_end` | Observer | Canonically at each turn finalization; CLI/TUI exits have additional reduced legacy shapes. Return ignored. | Canonical: `session_id`, `task_id`, `turn_id`, `completed`, `failed`, `interrupted`, `turn_exit_reason`, `model`, `platform`; exit paths may add `reason`/`api_request_id` and omit fields. | IDs, model/platform, and outcome; canonical payload has no message body. |
 | `on_session_finalize` | Observer | CLI/TUI/gateway teardown through `finalize_session`; gateway shutdown may finalize without a reset. Return ignored. | Surface-dependent `session_id`, `platform`, optionally `reason`, `old_session_id`, `new_session_id` | Session and routing identifiers. |
 | `on_session_reset` | Observer | CLI/TUI session boundary and gateway after the replacement session exists; return ignored. | CLI: `session_id`, `platform`, `reason`; TUI: `session_id`, `platform`; gateway: those plus `reason`, `old_session_id`, `new_session_id` | Session and routing identifiers. |
+| `on_compaction_complete` | Observer | Completed context compaction boundary across chat_completions and Codex app-server routes; return ignored. | `session_id`, `compression_count`, `in_place`, `runtime`, `platform`, optionally `thread_id`, `turn_id`, `old_session_id`, `agent` | Session and compaction counter metadata. |
 | `agent_loop_stopped` | Observer | Immediately after a real running agent is interrupted — gateway `_interrupt_and_clear_session` or TUI/desktop `session.interrupt`; return ignored. | `session_key`, `platform`, `reason`, `invalidation_reason` | Session/routing identifiers and interruption reasons; no message body. |
 | `on_skill_lifecycle` | Observer | After an authoritative skill-usage state change; return ignored. | `action`, `skill_name`, `provenance`, `task_id`, `session_id`, `use_count`, `reused`, `reuse_after_patch` | Exposes the local skill name and provenance. |
 | `subagent_start` | Observer | Child constructed and about to run; return ignored. | `parent_session_id`, `parent_turn_id`, `parent_subagent_id`, `child_session_id`, `child_subagent_id`, `child_role`, `child_goal` | Child goal may contain user/project content. |
@@ -1040,6 +1041,34 @@ def my_callback(session_id: str, platform: str, **kwargs):
 **Return value:** Ignored.
 
 **Use cases:** Reset per-session caches keyed by `session_id`, emit "session rotated" analytics, prime a fresh state bucket.
+
+---
+
+### `on_compaction_complete`
+
+Fires when a context compaction successfully completes on standard (chat_completions) or Codex app-server routes.
+
+**Callback signature:**
+
+```python
+def my_callback(session_id: str, compression_count: int, in_place: bool, runtime: str, **kwargs):
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `session_id` | `str` | Current active session ID. |
+| `compression_count` | `int` | Distinct completed compaction count for the session. |
+| `in_place` | `bool` | True if in-place compaction occurred, False if rotated. |
+| `runtime` | `str` | `"chat_completions"` or `"codex_app_server"`. |
+| `platform` | `str` | Calling platform (`"cli"`, `"tui"`, etc.). |
+| `old_session_id` | `str`, optional | Previous session ID on rotation. |
+| `thread_id` | `str`, optional | Codex thread ID (when runtime is `"codex_app_server"`). |
+| `turn_id` | `str`, optional | Active turn ID (when runtime is `"codex_app_server"`). |
+| `agent` | `AIAgent`, optional | The active AIAgent instance. |
+
+**Return value:** Ignored.
+
+**Use cases:** Trigger proactive checkpoints, update external memory lineage, emit compaction metrics.
 
 ---
 

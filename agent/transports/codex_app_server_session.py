@@ -54,6 +54,7 @@ class TurnResult:
     token_usage_last: Optional[dict[str, Any]] = None
     model_context_window: Optional[int] = None
     compacted: bool = False
+    compaction_count: int = 0
     # Codex likely wedged (turn timeout, dead subprocess, token refresh failure): caller respawns next turn.
     should_retire: bool = False
 
@@ -202,10 +203,12 @@ class CodexAppServerSession:
         client_factory: Optional[Callable[..., CodexAppServerClient]] = None,
         model: Optional[str] = None, model_provider: Optional[str] = None,
         developer_instructions: Optional[str] = None,
+        on_compaction: Optional[Callable[[int], None]] = None,
     ) -> None:
         self._cwd = cwd or os.getcwd()
         self._codex_bin = codex_bin
         self._codex_home = codex_home
+        self._on_compaction = on_compaction
         # ``thread/start.model`` / ``.modelProvider``: select a provider from codex's own
         # ``[model_providers.<id>]`` table. Only the id travels; codex reads base_url/env_key itself.
         self._model = (model or "").strip() or None
@@ -383,7 +386,7 @@ class CodexAppServerSession:
                 self._on_event(note)
             except Exception:  # pragma: no cover - display callback
                 logger.debug("on_event callback raised", exc_info=True)
-        _apply_accounting_notification(result, note)
+        _apply_accounting_notification(result, note, on_compaction=self._on_compaction)
         self._track_pending_file_change(note)
         projection = projector.project(note)
         if projection.messages:
@@ -739,7 +742,7 @@ def _summarize_file_changes(raw_changes: list) -> str:
     return f"{counts}: {preview}" if preview else counts
 
 
-def _apply_accounting_notification(result: TurnResult, note: dict) -> None:
+def _apply_accounting_notification(result: TurnResult, note: dict, on_compaction: Optional[Callable[[int], None]] = None) -> None:
     """Capture token usage (thread/tokenUsage/updated, not turn/completed) and compaction
     boundaries (a contextCompaction item on recent builds, deprecated thread/compacted on older)."""
     if not isinstance(note, dict):
@@ -758,10 +761,50 @@ def _apply_accounting_notification(result: TurnResult, note: dict) -> None:
                 result.model_context_window = window
         return
     item = params.get("item") if method in {"item/started", "item/completed"} else None
-    if method == "thread/compacted" or (isinstance(item, dict) and item.get("type") == "contextCompaction"):
+    compacted_event = False
+    if method == "thread/compacted":
+        # Support legacy-only producers (and 0.100.0 dual-emission paired streams)
+        # using max(legacy_count, item_count) correlation without inventing unsupported IDs.
+        legacy_count = getattr(result, "_legacy_compacted_count", 0) + 1
+        setattr(result, "_legacy_compacted_count", legacy_count)
+        item_count = len(getattr(result, "_completed_compaction_item_ids", set()))
+        if legacy_count > item_count:
+            compacted_event = True
+    elif method == "item/started" and isinstance(item, dict) and item.get("type") == "contextCompaction":
+        return
+    elif method == "item/completed" and isinstance(item, dict) and item.get("type") == "contextCompaction":
+        item_id = item.get("id")
+        # S4/S6: A missing or malformed required modern item ID must not be promoted by an invented unique ID.
+        # Diagnostic logging uses a constant bounded classification message and never echoes untrusted item payload.
+        if item_id is None:
+            logger.warning("Ignored contextCompaction item with missing id field")
+            return
+        if not isinstance(item_id, str):
+            logger.warning("Ignored contextCompaction item with non-string id type: %s", type(item_id).__name__)
+            return
+        if not item_id.strip():
+            logger.warning("Ignored contextCompaction item with blank id")
+            return
+        completed_ids = getattr(result, "_completed_compaction_item_ids", None)
+        if completed_ids is None:
+            completed_ids = set()
+            setattr(result, "_completed_compaction_item_ids", completed_ids)
+        if item_id not in completed_ids:
+            completed_ids.add(item_id)
+            legacy_count = getattr(result, "_legacy_compacted_count", 0)
+            if len(completed_ids) > legacy_count:
+                compacted_event = True
+
+    if compacted_event:
         result.compacted = True
+        result.compaction_count += 1
         result.thread_id = params.get("threadId") or result.thread_id
         result.turn_id = params.get("turnId") or result.turn_id
+        if on_compaction is not None:
+            try:
+                on_compaction(result.compaction_count)
+            except Exception:
+                logger.debug("on_compaction callback raised", exc_info=True)
 
 
 # Hermes approval choice -> codex decision (app-server-protocol v2). "deny" and
