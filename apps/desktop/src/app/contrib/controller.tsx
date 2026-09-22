@@ -42,13 +42,25 @@ import { discoverBundledPlugins } from '@/contrib/plugins'
 import { Slot } from '@/contrib/react/slot'
 import { registry } from '@/contrib/registry'
 import { discoverRuntimePlugins } from '@/contrib/runtime-loader'
-import { translateNow } from '@/i18n'
+import { LocalizedTabTitle, translateNow } from '@/i18n'
 import { NEW_SESSION_TITLE, sessionTitle as storedSessionTitle } from '@/lib/chat-runtime'
-import { Download, FileText, LayoutDashboard, PanelBottom, PanelTop, Terminal, Upload, Users, Zap } from '@/lib/icons'
+import {
+  Download,
+  FileText,
+  LayoutDashboard,
+  PanelBottom,
+  PanelTop,
+  SlidersHorizontal,
+  Terminal,
+  Upload,
+  Users,
+  Zap
+} from '@/lib/icons'
 import { type KeybindContribution, KEYBINDS_AREA } from '@/lib/keybinds/actions'
 import { isOnboardingEnabled } from '@/lib/onboarding-enabled'
 import { TRANSCRIPT_DIRECTIVE_AREA, type TranscriptDirectiveContribution } from '@/lib/transcript-directives'
 import { setYoloEnabled } from '@/lib/yolo-session'
+import { $interfaceMode, $showsAdvancedChrome, setModeContext, toggleSimpleMode } from '@/store/interface-mode'
 import {
   $fileBrowserOpen,
   $panesFlipped,
@@ -56,11 +68,14 @@ import {
   FILE_BROWSER_DEFAULT_WIDTH,
   FILE_BROWSER_MAX_WIDTH,
   FILE_BROWSER_MIN_WIDTH,
+  fileBrowserSide,
   setFileBrowserOpen,
   setSidebarOpen,
   SIDEBAR_DEFAULT_WIDTH,
-  SIDEBAR_MAX_WIDTH
+  SIDEBAR_MAX_WIDTH,
+  sidebarSide
 } from '@/store/layout'
+import { $profiles } from '@/store/profile'
 import { $profileRailVisible } from '@/store/profile-rail-prefs'
 import { runExportProfileFlow, runImportProfileFlow } from '@/store/profile-share'
 import {
@@ -162,7 +177,9 @@ registry.registerMany([
   {
     id: 'sessions',
     area: 'panes',
-    title: 'sessions',
+    // String fallback only (menus, drag ghosts); the tab itself renders
+    // `tabTitle` below so the strip follows `display.language` once it loads.
+    title: translateNow('sidebar.sessions'),
     // Collapsible: leaves the grid on narrow viewports (edge overlay instead).
     // dock: where a RE-ADOPTED pane lands (healed from a stale dismissal) —
     // its default-ish spot beside main, not a random same-placement stack.
@@ -174,6 +191,8 @@ registry.registerMany([
       // Standing chrome: no close gestures at all — the tab is shown/hidden
       // (zone menu Show/Hide rows + the auto-registered ⌘K toggle below).
       hideOnly: true,
+      tabTitle: () => <LocalizedTabTitle select={t => t.sidebar.sessions} />,
+      tabTitleText: () => translateNow('sidebar.sessions'),
       width: `${SIDEBAR_DEFAULT_WIDTH}px`,
       minWidth: `${SIDEBAR_DEFAULT_WIDTH}px`,
       maxWidth: `${SIDEBAR_MAX_WIDTH}px`
@@ -197,12 +216,11 @@ registry.registerMany([
   {
     id: 'terminal',
     area: 'panes',
-    title: 'terminal',
-    // revealOnPreset: choosing a layout that places the terminal (e.g.
-    // "Terminal deck") turns takeover on so the zone actually shows, instead of
-    // staying collapsed behind the ⌃` toggle. height sizes the fixed track (a
-    // single-pane zone declaring a height is a fixed track — the preset weight
-    // is moot): a short deck, not a third of the window.
+    // Register-time sample; the tab renders `tabTitle` (see sessions).
+    title: translateNow('sidebar.terminal'),
+    // height sizes the fixed track (a single-pane zone declaring a height is a
+    // fixed track — the preset weight is moot): a short deck, not a third of
+    // the window.
     //
     // NO minHeight: a tool panel drags all the way down to its collapsed
     // header (the sash floors it at COLLAPSED_ZONE_PX and folds the zone to
@@ -211,15 +229,16 @@ registry.registerMany([
       placement: 'bottom',
       height: '20vh',
       maxHeight: '80vh',
-      revealOnPreset: true,
-      lifecycleKeepAlive: true
+      lifecycleKeepAlive: true,
+      tabTitle: () => <LocalizedTabTitle select={t => t.sidebar.terminal} />,
+      tabTitleText: () => translateNow('sidebar.terminal')
     },
     render: () => <WiredPane part="terminal" />
   },
   {
     id: 'files',
     area: 'panes',
-    title: 'files',
+    title: translateNow('sidebar.files'),
     // dock: re-adoption target after a stale dismissal (see sessions).
     data: {
       placement: 'right',
@@ -228,14 +247,16 @@ registry.registerMany([
       revealAliases: ['file-browser'],
       width: FILE_BROWSER_DEFAULT_WIDTH,
       minWidth: FILE_BROWSER_MIN_WIDTH,
-      maxWidth: FILE_BROWSER_MAX_WIDTH
+      maxWidth: FILE_BROWSER_MAX_WIDTH,
+      tabTitle: () => <LocalizedTabTitle select={t => t.sidebar.files} />,
+      tabTitleText: () => translateNow('sidebar.files')
     },
     render: () => idle(<FilesPane />)
   },
   {
     id: 'review',
     area: 'panes',
-    title: 'review',
+    title: translateNow('sidebar.review'),
     // The second right sidebar: hidden until ⌘G ($reviewOpen) — bound below
     // like the other chrome toggles; its zone collapses while hidden.
     data: {
@@ -244,7 +265,9 @@ registry.registerMany([
       revealAliases: [REVIEW_PANE_ID],
       width: FILE_BROWSER_DEFAULT_WIDTH,
       minWidth: FILE_BROWSER_MIN_WIDTH,
-      maxWidth: FILE_BROWSER_MAX_WIDTH
+      maxWidth: FILE_BROWSER_MAX_WIDTH,
+      tabTitle: () => <LocalizedTabTitle select={t => t.sidebar.review} />,
+      tabTitleText: () => translateNow('sidebar.review')
     },
     render: () => idle(<ReviewPaneContent />)
   }
@@ -361,6 +384,17 @@ registry.registerMany([
     keywords: ['profile rail', 'profile bar', 'profile strip', 'profiles', 'sidebar', 'hide', 'show', 'chrome'],
     get: () => $profileRailVisible.get(),
     set: enabled => $profileRailVisible.set(enabled)
+  }),
+  // Simple hides most of the chrome that would offer the way back, so ⌘K is a
+  // guaranteed door (alongside the layout editor and Settings → Appearance).
+  paletteToggle({
+    id: 'view.simpleMode',
+    label: 'Simple mode',
+    action: 'view.toggleSimpleMode',
+    icon: SlidersHorizontal,
+    keywords: ['simple', 'advanced', 'mode', 'interface', 'chrome', 'minimal', 'focus', 'distraction'],
+    get: () => $interfaceMode.get() === 'simple',
+    set: toggleSimpleMode
   }),
   paletteToggle({
     id: 'view.toggleTabStrip',
@@ -553,11 +587,22 @@ $panesFlipped.listen(flipped => {
   }
 })
 
-// POSITIONAL side toggles (titlebar buttons, ⌘B / ⌘J): $sidebarOpen ≙ the
-// LEFT side of the main zone, $fileBrowserOpen ≙ the RIGHT — everything on
-// that side hides together, whatever panes have been rearranged there.
-bindTreeSideVisibility('left', $sidebarOpen, setSidebarOpen)
-bindTreeSideVisibility('right', $fileBrowserOpen, setFileBrowserOpen)
+// Side toggles (titlebar buttons, ⌘B / ⌘J) collapse a whole edge of the main
+// zone — everything on it hides together, whatever has been rearranged there.
+// Which store owns which edge follows the panes: mirrored, the sidebar sits
+// on the right and $sidebarOpen goes with it (see sidebarSide in store/layout).
+const $leftEdgeOpen = computed([$panesFlipped, $sidebarOpen, $fileBrowserOpen], (flipped, sidebar, files) =>
+  flipped ? files : sidebar
+)
+
+const $rightEdgeOpen = computed([$panesFlipped, $sidebarOpen, $fileBrowserOpen], (flipped, sidebar, files) =>
+  flipped ? sidebar : files
+)
+
+bindTreeSideVisibility('left', $leftEdgeOpen, open => ($panesFlipped.get() ? setFileBrowserOpen : setSidebarOpen)(open))
+bindTreeSideVisibility('right', $rightEdgeOpen, open =>
+  ($panesFlipped.get() ? setSidebarOpen : setFileBrowserOpen)(open)
+)
 
 // Workspace-scoped surfaces: the file tree and git diff only mean something
 // inside a project. A detached chat (no cwd) hides them — their zones
@@ -590,13 +635,19 @@ bindPaneVisibility(
   () => openReview($reviewScopeCwd.get(), $reviewScopeTarget.get())
 )
 // ⌃` / statusbar toggle — the terminal COLLAPSES to a rail (tab stays), not
-// hides; PTYs stay alive while collapsed (see PersistentTerminal).
+// hides; PTYs stay alive while collapsed (see PersistentTerminal). Simple has
+// no terminal: where chrome is off a closed one hides, rail and all, and ⌃`
+// is the door for the session.
 bindToolPaneCollapse(
   'terminal',
   $terminalTakeover,
   () => setTerminalTakeover(false),
-  () => setTerminalTakeover(true)
+  () => setTerminalTakeover(true),
+  $showsAdvancedChrome
 )
+// Policies may consult the install: the profile rail stays in Simple when a
+// second profile makes it the only remaining way to switch.
+$profiles.subscribe(profiles => setModeContext({ profileCount: profiles.length }))
 // ⌘K door onto the same pane the keybind and statusbar pill flip — was a
 // one-way "open" row under Go to, so it never showed on/off and couldn't hide.
 // Reads the TREE like every other pane toggle: `$terminalTakeover` stays true
@@ -629,7 +680,7 @@ const syncLogsPane = (open: boolean) => {
     unregisterLogsPane ??= registry.register({
       id: 'logs',
       area: 'panes',
-      title: 'logs',
+      title: translateNow('sidebar.logs'),
       // Same tool-panel sizing rule as the terminal above — no minHeight, so
       // the sash floors it at COLLAPSED_ZONE_PX and folds the zone to its rail
       // rather than leaving a sliver. dock: its OWN zone beside the terminal —
@@ -638,7 +689,9 @@ const syncLogsPane = (open: boolean) => {
         placement: 'bottom',
         dock: { pane: 'terminal', pos: 'right' },
         height: '20vh',
-        maxHeight: '80vh'
+        maxHeight: '80vh',
+        tabTitle: () => <LocalizedTabTitle select={t => t.sidebar.logs} />,
+        tabTitleText: () => translateNow('sidebar.logs')
       },
       render: () => idle(<LogsPane />)
     })
@@ -761,12 +814,18 @@ registry.register(
 // flips back) — but only while the pane actually lives in that root side
 // column. Dragged next to main, a side collapse can't hide it (the collapse
 // skips main-bearing children), so Close falls back to dismissal there —
-// otherwise ⌘W/Close silently no-op.
+// otherwise ⌘W/Close silently no-op. The sessions opener is the mirror: a
+// preset that places the sidebar shows it, ⌘B truthful.
 registerPaneCloser('sessions', () =>
-  paneRootSide('sessions') === 'left' ? setSidebarOpen(false) : dismissTreePane('sessions')
+  paneRootSide('sessions') === sidebarSide() ? setSidebarOpen(false) : dismissTreePane('sessions')
 )
+registerPaneOpener('sessions', () => {
+  if (paneRootSide('sessions') === sidebarSide()) {
+    setSidebarOpen(true)
+  }
+})
 registerPaneCloser('files', () =>
-  paneRootSide('files') === 'right' ? setFileBrowserOpen(false) : dismissTreePane('files')
+  paneRootSide('files') === fileBrowserSide() ? setFileBrowserOpen(false) : dismissTreePane('files')
 )
 
 // ---------------------------------------------------------------------------

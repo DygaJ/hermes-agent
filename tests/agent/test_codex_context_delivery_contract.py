@@ -18,6 +18,7 @@ def test_codex_receives_plugin_user_context_in_turn_input(monkeypatch):
     
     captured_inputs = []
     fake_session = SimpleNamespace(
+        ensure_started=lambda: "th-fake",
         run_turn=lambda user_input, **kw: (captured_inputs.append(user_input), TurnResult(final_text="ok"))[1]
     )
     
@@ -127,6 +128,7 @@ def test_c4_e2e_hook_collection_reaches_codex_wire_and_absent_control(monkeypatc
     # Wire run with absent context
     wire_inputs_absent = []
     fake_session_1 = SimpleNamespace(
+        ensure_started=lambda: "th-fake",
         run_turn=lambda user_input, **kw: (
             wire_inputs_absent.append(user_input),
             TurnResult(final_text="ok", thread_id="th-exact-1", turn_id="tu-1")
@@ -167,6 +169,7 @@ def test_c4_e2e_hook_collection_reaches_codex_wire_and_absent_control(monkeypatc
 
     wire_inputs_active = []
     fake_session_2 = SimpleNamespace(
+        ensure_started=lambda: "th-fake",
         run_turn=lambda user_input, **kw: (
             wire_inputs_active.append(user_input),
             TurnResult(final_text="ok 2", thread_id="th-exact-1", turn_id="tu-2")

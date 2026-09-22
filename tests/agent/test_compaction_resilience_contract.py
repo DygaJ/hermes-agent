@@ -49,6 +49,7 @@ def test_failed_turn_resets_seen_slot_so_next_turn_accounts_compactions():
     compressor = ContextCompressor(model="gpt-5-codex", quiet_mode=True)
     
     fake_session = SimpleNamespace(
+        ensure_started=lambda: "th-1",
         run_turn=MagicMock(side_effect=RuntimeError("simulated turn failure")),
     )
 
