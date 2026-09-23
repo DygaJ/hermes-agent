@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,11 @@ logger = logging.getLogger(__name__)
 PROVIDERS: tuple[tuple[str, str], ...] = (("openai-codex", "cx"), ("anthropic", "cc"))
 
 DEFAULT_INTERVAL_S = 60.0
+# How long a reading survives failed fetches. ``fetch_account_usage`` returns None for both a network
+# error and a 429 (the Anthropic usage endpoint rate-limits roughly every other call), so None only
+# clears a provider once it has persisted this long - long enough to ride out a burst of 429s, short
+# enough that signing out eventually removes the segment.
+DEFAULT_MAX_STALE_S = 15 * 60.0
 
 
 def _clamp(value) -> float:
@@ -59,11 +65,15 @@ class AccountLimitsPoller:
     """Background refresh of per-provider bar readings. ``read()`` is lock-free and cheap."""
 
     def __init__(self, fetch: Optional[Callable] = None, interval_s: float = DEFAULT_INTERVAL_S,
-                 on_change: Optional[Callable[[], None]] = None):
+                 on_change: Optional[Callable[[], None]] = None, max_stale_s: float = DEFAULT_MAX_STALE_S,
+                 clock: Callable[[], float] = time.monotonic):
         self._fetch = fetch
         self._interval_s = max(5.0, float(interval_s))
         self._on_change = on_change
+        self._max_stale_s = float(max_stale_s)
+        self._clock = clock
         self._limits: dict[str, tuple[tuple[str, float], ...]] = {}
+        self._fetched_at: dict[str, float] = {}
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -89,16 +99,26 @@ class AccountLimitsPoller:
             from agent.account_usage import fetch_account_usage
             fetch = fetch_account_usage
         fresh = dict(self._limits)
+        now = self._clock()
         for provider, label in PROVIDERS:
             try:
-                readings = bar_readings(fetch(provider), label)
+                snapshot = fetch(provider)
             except Exception:
                 logger.debug("status bar limits: %s fetch failed", provider, exc_info=True)
-                continue  # keep the last good reading rather than blanking the segment
+                snapshot = None
+            if snapshot is None:
+                # Failed fetch (429, timeout, no token): keep the last good reading until it goes stale.
+                if now - self._fetched_at.get(provider, now) >= self._max_stale_s:
+                    fresh.pop(provider, None)
+                    self._fetched_at.pop(provider, None)
+                continue
+            readings = bar_readings(snapshot, label)
             if readings:
                 fresh[provider] = tuple(readings)
-            else:
+                self._fetched_at[provider] = now
+            else:  # the provider answered and reports no windows (e.g. an API key, not OAuth)
                 fresh.pop(provider, None)
+                self._fetched_at.pop(provider, None)
         changed = fresh != self._limits
         self._limits = fresh  # single reference swap: readers never see a half-built dict
         if changed and self._on_change is not None:

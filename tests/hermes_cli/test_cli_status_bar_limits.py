@@ -73,6 +73,26 @@ def test_poller_keeps_last_good_reading_when_a_fetch_fails():
     assert poller.read() == [("cx", 22.0), ("cc", 27.0)]
 
 
+def test_poller_keeps_last_reading_when_fetch_returns_none_until_stale():
+    """``fetch_account_usage`` returns None on a 429; the Anthropic usage endpoint answers about
+    every other call with one, so None must not blank the segment until it outlives max_stale_s."""
+    now = {"t": 0.0}
+    results = iter([_claude(session=27), None, None, None])
+    poller = AccountLimitsPoller(fetch=lambda p: next(results) if p == "anthropic" else None,
+                                 max_stale_s=300.0, clock=lambda: now["t"])
+    poller.refresh_once()
+    assert poller.read() == [("cc", 27.0)]
+    now["t"] = 60.0
+    poller.refresh_once()
+    assert poller.read() == [("cc", 27.0)]
+    now["t"] = 299.0
+    poller.refresh_once()
+    assert poller.read() == [("cc", 27.0)]
+    now["t"] = 300.0
+    poller.refresh_once()
+    assert poller.read() == []
+
+
 def test_poller_drops_provider_that_reports_no_windows():
     poller = AccountLimitsPoller(fetch=lambda p: _claude(session=40) if p == "anthropic" else _codex())
     poller.refresh_once()
