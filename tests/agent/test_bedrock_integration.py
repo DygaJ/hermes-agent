@@ -475,7 +475,7 @@ class TestAuxiliaryClientBedrockResolution:
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bearer-launch")
         monkeypatch.setenv("AWS_REGION", "us-east-1")
         monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
-        monkeypatch.setattr(bedrock_adapter, "_boto3_chain_has_credentials", lambda: False)
+        monkeypatch.setattr(bedrock_adapter, "_boto3_chain_has_credentials", lambda **_: False)
         bedrock_adapter.reset_client_cache()
 
         def in_scope(home, fn):
