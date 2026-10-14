@@ -385,14 +385,20 @@ def _boto3_chain_has_credentials(*, instance_metadata: bool = True) -> bool:
 
 
 def _aws_auth_detection_env() -> dict[str, str]:
-    """Env for AWS auth detection: the routed profile's secret scope under a HERMES_HOME override (the
-    same switch ``resolve_bedrock_bearer_token`` makes), else ``os.environ``. Under multiplexing the
-    process env holds the LAUNCH profile's ``AWS_*``, which must not admit or label a served profile."""
+    """Env for AWS auth detection. Under a HERMES_HOME override each chain var resolves through
+    ``get_secret``, the lookup ``resolve_bedrock_bearer_token`` uses: the profile's secret scope
+    first, then ``os.environ`` unless the task serves another profile. Under multiplexing the
+    process env holds the LAUNCH profile's ``AWS_*``, which must not admit or label a served
+    profile, so a served profile sees only its own scope and nothing when none is bound."""
     from hermes_constants import get_hermes_home_override
-    if get_hermes_home_override() is not None:
-        from agent.secret_scope import current_secret_scope
-        return dict(current_secret_scope() or {})
-    return dict(os.environ)
+    if get_hermes_home_override() is None:
+        return dict(os.environ)
+    from agent.secret_scope import UnscopedSecretError, get_secret
+    names = {var for group in _AWS_AUTH_ENV_CHAIN for var in group}
+    try:
+        return {name: value for name in names if (value := get_secret(name))}
+    except UnscopedSecretError:
+        return {}
 
 
 def resolve_aws_auth_env_var(

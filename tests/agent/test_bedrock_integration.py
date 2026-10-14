@@ -561,6 +561,42 @@ class TestAuxiliaryClientBedrockResolution:
             reset_hermes_home_override(h_tok)
             bedrock_adapter.reset_client_cache()
 
+    def test_own_home_override_detects_the_bearer_the_lookup_resolves(self, tmp_path, monkeypatch):
+        """Single-profile host, override pinned to the process's own home (the cron external
+        worker), bearer injected into the process env (systemd, ``op run``) rather than the
+        profile .env. Detection must see the same bearer ``resolve_bedrock_bearer_token`` sees,
+        or aux Bedrock calls are skipped. A task routed for another home still gets neither."""
+        from agent import bedrock_adapter, secret_scope
+        from hermes_constants import (
+            get_routing_process_hermes_home, reset_hermes_home_override, set_hermes_home_override,
+        )
+
+        for var in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bearer-process")
+        monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", False)
+        monkeypatch.setattr(bedrock_adapter, "_boto3_chain_has_credentials", lambda **_: False)
+
+        def in_scope(home, fn):
+            h_tok = set_hermes_home_override(str(home))
+            s_tok = secret_scope.set_secret_scope({}, profile_home=str(home))
+            try:
+                return fn()
+            finally:
+                secret_scope.reset_secret_scope(s_tok)
+                reset_hermes_home_override(h_tok)
+
+        own = get_routing_process_hermes_home()
+        assert in_scope(own, bedrock_adapter.resolve_bedrock_bearer_token) == "bearer-process"
+        assert in_scope(own, bedrock_adapter.resolve_aws_auth_env_var) == "AWS_BEARER_TOKEN_BEDROCK"
+        assert in_scope(own, bedrock_adapter.has_aws_credentials) is True
+
+        other = tmp_path / "home-other"
+        other.mkdir()
+        assert in_scope(other, bedrock_adapter.resolve_bedrock_bearer_token) == ""
+        assert in_scope(other, bedrock_adapter.resolve_aws_auth_env_var) is None
+        assert in_scope(other, bedrock_adapter.has_aws_credentials) is False
+
     def test_bedrock_returns_none_without_credentials(self, monkeypatch):
         """Without AWS credentials, Bedrock should return (None, None) gracefully."""
         with patch("agent.bedrock_adapter.has_aws_credentials", return_value=False):
