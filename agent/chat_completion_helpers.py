@@ -2607,14 +2607,13 @@ class _BedrockStream:
     def _fall_back_to_converse(self, client, final_kwargs: dict, exc: Exception):
         # InvokeModel-only IAM policies cannot stream; fall back inside the same Relay
         # attempt (one lifecycle boundary).
-        from agent.bedrock_adapter import normalize_converse_response
         self.agent._disable_streaming = True
         self.agent._safe_print("\n⚠  AWS IAM denied bedrock:InvokeModelWithResponseStream — "
             "falling back to non-streaming InvokeModel.\n"
             "   Grant that action to restore streaming output.\n", diagnostic=True)
         logger.info("bedrock: converse_stream denied by IAM (%s) — "
             "using non-streaming converse() for this session.", type(exc).__name__)
-        return normalize_converse_response(client.converse(**final_kwargs))
+        return _bedrock_converse_call({**final_kwargs, "__bedrock_region__": self.region}, stream=False)
 
     def _worker(self):
         agent = self.agent

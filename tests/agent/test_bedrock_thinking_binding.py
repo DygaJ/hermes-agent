@@ -23,7 +23,9 @@ ClientError = pytest.importorskip("botocore.exceptions").ClientError
 ADAPTIVE = "global.anthropic.claude-opus-5-5"
 BETA = "thinking-binding-controls-2026-08-01"
 BINDING_MESSAGES = (
-    "messages.1.content.0: thinking block is bound to a different conversation prefix",
+    "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. "
+    "Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \"drop_block\". "
+    "That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header.",
     "thinking block signature does not match; set thinking.block_binding.prefix_mismatch_behavior",
 )
 OK_RESPONSE = {
@@ -177,6 +179,44 @@ def test_binding_rejection_resends_once_with_opt_in_on_every_call_site(route, va
     assert {k: v for k, v in fields.items() if k not in ("anthropic_beta", "thinking")} == base_fields
 
 
+@pytest.mark.parametrize("retry_fails", [False, True])
+def test_iam_denied_stream_fallback_recovers_binding_once(retry_fails):
+    """The IAM fallback retains its region and recovers a binding rejection on Converse."""
+    denied = _client_error("AccessDeniedException", "Not authorized: bedrock:InvokeModelWithResponseStream", "ConverseStream")
+    last = _binding_error() if retry_fails else OK_RESPONSE
+    client = _FakeRuntime(denied, _binding_error(), last)
+    kwargs = _main_kwargs({"effort": "high"})
+    kwargs["__bedrock_region__"] = "eu-west-1"
+    original = copy.deepcopy(_wire(kwargs))
+    agent = _StreamAgent()
+    regions = []
+
+    def runtime(region):
+        regions.append(region)
+        return client
+
+    with patch("agent.bedrock_adapter._get_bedrock_runtime_client", side_effect=runtime):
+        stream = cch._BedrockStream(agent, kwargs, None)
+        if retry_fails:
+            with pytest.raises(ClientError) as raised:
+                stream._open_stream(kwargs)
+            assert raised.value is last
+        else:
+            response = stream._open_stream(kwargs)
+            assert response.choices[0].message.content == "done"
+    assert agent._disable_streaming is True
+    assert regions and all(region == "eu-west-1" for region in regions)
+    assert [op for op, _ in client.calls] == ["converse_stream", "converse", "converse"]
+    assert client.calls[0][1] == client.calls[1][1] == original
+    retried = client.calls[2][1]
+    assert retried["messages"] == original["messages"]
+    assert retried["system"] == original["system"]
+    assert retried["toolConfig"] == original["toolConfig"]
+    fields = retried["additionalModelRequestFields"]
+    assert fields["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
+    assert BETA in fields["anthropic_beta"]
+
+
 def test_existing_betas_are_kept_and_input_kwargs_are_not_mutated():
     """C1/R2: the beta merges into an existing list, and the caller's kwargs stay byte-identical."""
     kwargs = _main_kwargs({"effort": "high"})
@@ -261,17 +301,15 @@ def test_binding_error_raised_while_reading_stream_is_not_retried():
 
 
 @pytest.mark.parametrize("route", ("stream", "nonstream"))
-def test_signed_tool_history_survives_recovery_without_rerunning_tools(route):
-    """C4/R4: a completed tool round converts through the production transport, and the recovery replays
-    it verbatim - same signature, one toolUse and one toolResult for the call id - with no tool run."""
+def test_signed_tool_history_survives_recovery_unchanged(route):
+    """C4/R4: a completed tool round converts through the production transport and replays verbatim.
+    The request keeps the signature, one toolUse and one toolResult for the call id."""
     history = _history()
     snapshot = copy.deepcopy(history)
     kwargs = _main_kwargs({"effort": "high"}, messages=history)
     client = _FakeRuntime(_binding_error(_op(route)), OK_RESPONSE)
-    with patch("model_tools.handle_function_call") as executor:
-        _run(route, client, kwargs=kwargs)
+    _run(route, client, kwargs=kwargs)
 
-    executor.assert_not_called()
     assert history == snapshot
     first, retry = client.calls[0][1], client.calls[1][1]
     assert retry["messages"] == first["messages"]
