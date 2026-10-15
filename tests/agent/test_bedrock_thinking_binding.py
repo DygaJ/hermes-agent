@@ -1,7 +1,7 @@
 """Bedrock Converse recovery for Claude thinking-block prefix-binding rejections.
 
-Anthropic OAuth adds a system prefix and ``mcp__`` tool names, so a fallback to Bedrock replays signed
-thinking under a different conversation prefix and Bedrock rejects it. The recovery resends once with
+Bedrock rejects signed thinking when its earlier conversation prefix changes, either on a provider
+switch or within a Bedrock-only session. The recovery resends once with
 the documented ``block_binding.prefix_mismatch_behavior=drop_block`` opt-in. The contract pinned here:
 only that rejection triggers it, healthy requests never change, history and tool results are replayed
 verbatim (no tool re-run), and the retry happens once on every production call site.

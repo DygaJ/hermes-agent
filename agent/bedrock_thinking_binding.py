@@ -1,9 +1,9 @@
 """Bedrock Converse recovery for Claude thinking-block prefix-binding rejections.
 
-Signed thinking blocks are bound to the conversation prefix that produced them. When that prefix
-changes between issue and replay (Anthropic OAuth adds a system prefix and ``mcp__`` tool names, so a
-fallback to Bedrock replays the signatures under a different prefix), Bedrock rejects the request with
-a ValidationException. AWS documents the opt-in remedy: send the ``thinking-binding-controls-2026-08-01``
+Signed thinking blocks are bound to the conversation prefix that produced them. Bedrock rejects a
+replayed block when earlier messages, the system prompt or tools change, including within the same
+provider. Anthropic OAuth-to-Bedrock fallback is one trigger because the OAuth route transforms the
+system prompt and tool names. AWS documents the opt-in remedy: send the ``thinking-binding-controls-2026-08-01``
 beta with ``thinking.block_binding.prefix_mismatch_behavior=drop_block`` in
 ``additionalModelRequestFields`` and the server drops only the mismatched blocks
 (https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-thinking-block-binding.html).
