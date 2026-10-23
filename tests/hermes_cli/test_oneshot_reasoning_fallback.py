@@ -50,3 +50,7 @@ def test_reasoning_flag_survives_fallback(oneshot):
 
 def test_without_the_flag_fallback_resolves_the_fallback_models_config(oneshot):
     assert oneshot("ping")[0] == "fb-model:low"
+
+
+def test_an_unparsed_flag_is_not_the_runs_own_level(oneshot):
+    assert oneshot("ping", reasoning="bogus")[0] == "fb-model:low"
