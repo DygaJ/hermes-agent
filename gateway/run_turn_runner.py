@@ -1274,10 +1274,12 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         pr = session_routing(active_authority(runner), policy) if policy else runner._provider_routing
         reasoning_config = (policy.current_reasoning_config(runner, ctx.session_key) if policy else
             runner._resolve_session_reasoning_config(source=ctx.source, session_key=ctx.session_key, model=model))
-        reasoning_pinned = (policy.reasoning_pinned(runner, ctx.session_key) if policy else
-            runner._session_reasoning_pinned(ctx.session_key))
         from gateway.session_cli_turn import one_turn_reasoning
-        reasoning_config = one_turn_reasoning(self, reasoning_config)  # `/model --once --reasoning X`
+        session_reasoning, reasoning_config = reasoning_config, one_turn_reasoning(self, reasoning_config)
+        # Explicit levels (the session's, `/model --once --reasoning X`, a request's below) outrank a
+        # fallback model's config; one_turn_reasoning returns its input unchanged when no level applies.
+        reasoning_pinned = reasoning_config is not session_reasoning or (
+            policy.reasoning_pinned(runner, ctx.session_key) if policy else runner._session_reasoning_pinned(ctx.session_key))
         runner._service_tier = (policy.current_service_tier(runner, ctx.session_key) if policy else
             runner._resolve_session_service_tier(source=ctx.source, session_key=ctx.session_key))
         from gateway.session_api_turn import api_execution
@@ -1286,7 +1288,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             from gateway.platforms.api_server import _request_reasoning_config, _request_service_tier, _REQUEST_OPTION_MISSING
             requested_reasoning = _request_reasoning_config(api['settings'].get('model_options'))
             if requested_reasoning is not None:
-                reasoning_config = requested_reasoning
+                reasoning_config, reasoning_pinned = requested_reasoning, True
             tier = _request_service_tier(api['settings'].get('model_options'))
             if tier is not _REQUEST_OPTION_MISSING:
                 runner._service_tier = tier
