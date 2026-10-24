@@ -120,6 +120,14 @@ def test_a3_once_reasoning_level_survives_fallback(gateway_home):
     assert result["final_response"] == "high>fb-model:high pinned=True"
 
 
+def test_a3_once_level_equal_to_the_config_level_still_pins(gateway_home):
+    """A3-once-equal: `--once --reasoning medium` names the profile's own global level. It is still
+    the caller's choice, so the fallback keeps medium instead of fb-model's configured low."""
+    result = _turn({"model_override": {"model": "once-model", "reasoning": "medium"}})
+
+    assert result["final_response"] == "medium>fb-model:medium pinned=True"
+
+
 def test_a3_api_request_reasoning_level_survives_fallback(gateway_home):
     """A3-api: an API request's model_options reasoning keeps its level after the fallback bind."""
     assert _config_levels() == {"medium", "low"}  # config never yields the requested "high"
