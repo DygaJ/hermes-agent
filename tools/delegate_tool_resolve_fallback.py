@@ -1,7 +1,8 @@
 """Resolution-time fallback for delegation routes: when a route's primary provider refuses at credential
 resolution with an auth, quota or transient network error, walk the route's own fallback chain before the
 task is refused (#146645). The first entry that resolves becomes the child's primary; the entries after it
-stay the child's mid-run chain. Cron's ``_resolve_job_runtime`` uses the same fall-through predicate.
+stay the child's mid-run chain. The fall-through predicate is ``cron.scheduler_preflight.primary_resolve_falls_through``,
+which cron's ``_resolve_job_runtime`` uses too.
 """
 
 from __future__ import annotations
@@ -13,24 +14,21 @@ logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the 
 
 T = TypeVar("T")
 
-# AuthError codes that are misconfiguration, not a credential state: a typo'd provider or an absent key must
-# refuse with today's message rather than quietly run the task on another provider.
-_MISCONFIGURED_AUTH_CODES = frozenset({"invalid_provider", "missing_api_key", "no_provider_configured"})
-
-
-def primary_resolve_falls_through(exc: BaseException) -> bool:
-    """True when a primary provider's resolve failure may walk the fallback chain: an ``AuthError`` (expired
-    credentials, exhausted quota, a pool in cooldown) or a transient network error. Shared with
-    ``cron/scheduler.py::_resolve_job_runtime``."""
-    from cron.scheduler_preflight import _is_transient_provider_resolve_error
-    from hermes_cli.auth import AuthError
-    return isinstance(exc, AuthError) or _is_transient_provider_resolve_error(exc)
+# AuthError codes that are misconfiguration, not a credential state: a typo'd provider, an absent key, a provider
+# with no endpoint or a CLI that is not installed must refuse with today's message rather than quietly run the
+# task on another provider.
+_MISCONFIGURED_AUTH_CODES = frozenset({
+    "invalid_provider", "missing_api_key", "no_provider_configured", "missing_base_url",
+    "missing_external_process_cli"})
 
 
 def _fallthrough_cause(exc: ValueError) -> Optional[BaseException]:
     """The resolver failure behind a route refusal when it may walk the chain, else None. The route resolvers
-    wrap ``resolve_runtime_provider``'s exception as ``__cause__``; a refusal without one (no API key in the
-    resolved runtime, a pinned command missing from PATH) is a configuration problem."""
+    wrap ``resolve_runtime_provider``'s exception as ``__cause__``. A refusal without one (the resolved runtime
+    has no API key or base_url, or its pinned command is not on PATH) and an ``AuthError`` whose code marks
+    configuration (an unknown provider, an API-key provider without a key, no endpoint, an external-process CLI
+    the resolver could not find) refuse."""
+    from cron.scheduler_preflight import primary_resolve_falls_through
     cause = exc.__cause__
     if cause is None or getattr(cause, "code", None) in _MISCONFIGURED_AUTH_CODES:
         return None

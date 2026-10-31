@@ -50,14 +50,16 @@ def _codex_quota_exhausted(model):
 @pytest.fixture
 def resolver(monkeypatch):
     """Fake ``resolve_runtime_provider``: ``resolver.failing[provider]`` is a callable(model) that raises;
-    unknown providers go to the real resolver. ``resolver.calls`` records ``(provider, model)``."""
+    unknown providers go to the real resolver. ``resolver.calls`` records ``(provider, model)`` and
+    ``resolver.explicit`` the other kwargs of each call."""
     import hermes_cli.runtime_provider as rp
 
     real = rp.resolve_runtime_provider
-    state = types.SimpleNamespace(calls=[], failing={})
+    state = types.SimpleNamespace(calls=[], failing={}, explicit=[])
 
     def resolve(requested=None, target_model=None, **kwargs):
         state.calls.append((requested, target_model))
+        state.explicit.append(kwargs)
         if requested in state.failing:
             state.failing[requested](target_model)
         if requested not in RUNTIMES:
@@ -105,12 +107,13 @@ def _fallback_warnings(caplog):
 def test_default_route_resolve_fallback_on_exhausted_anthropic_pool(resolver, caplog):
     """The reported case: delegation.provider anthropic in 429 cooldown, delegation.fallback_providers bedrock."""
     resolver.failing["anthropic"] = _exhausted_anthropic
-    config = {**PRIMARY, "fallback_providers": [BEDROCK]}
+    config = {**PRIMARY, "fallback_providers": [BEDROCK], "request_overrides": {"extra_body": {"tag": "review"}}}
     with caplog.at_level(logging.WARNING, logger="tools.delegate_tool"):
         (route,) = _routes([{"goal": "review the diff"}], config)
     assert route.error is None
     assert (route.creds["provider"], route.creds["model"]) == ("bedrock", "global.anthropic.claude-opus-5-5")
     assert route.creds["base_url"] == RUNTIMES["bedrock"]["base_url"]
+    assert route.creds["request_overrides"] == {"extra_body": {"tag": "review"}}
     assert resolver.calls == [("anthropic", "claude-opus-5-5"), ("bedrock", "global.anthropic.claude-opus-5-5")]
     (warning,) = _fallback_warnings(caplog)
     assert warning.startswith("Primary provider auth failed (Anthropic credentials are rate-limited for "
@@ -155,6 +158,11 @@ def test_explicit_empty_chain_resolve_fallback_still_refuses(resolver):
     assert resolver.calls == [("anthropic", "claude-opus-5-5")]
 
 
+def _missing_cli(model):
+    raise AuthError("Could not find the 'acme-acp' CLI command 'acmecli'. Install it.", provider="acme-acp",
+                    code="missing_external_process_cli")
+
+
 def _missing_key(model):
     raise AuthError("No usable credentials found for provider 'anthropic'.", provider="anthropic",
                     code="missing_api_key")
@@ -165,6 +173,11 @@ def _missing_key(model):
                  "Cannot resolve delegation provider 'anthropc': Unknown provider 'anthropc'.", id="unknown-provider"),
     pytest.param(dict(PRIMARY), {"anthropic": _missing_key},
                  "Cannot resolve delegation provider 'anthropic': No usable credentials found", id="missing-key"),
+    pytest.param({"provider": "ollama", "model": "llama4"}, {},
+                 "Cannot resolve delegation provider 'ollama': provider 'ollama' has no endpoint configured",
+                 id="no-endpoint"),
+    pytest.param({"provider": "acme-acp", "model": "acme-1"}, {"acme-acp": _missing_cli},
+                 "Cannot resolve delegation provider 'acme-acp': Could not find the 'acme-acp' CLI", id="missing-cli"),
 ])
 def test_misconfigured_primary_resolve_fallback_refuses_with_todays_message(resolver, primary, failing, expected):
     """A typo or a missing key is configuration, not a credential state: the task refuses and names it."""
@@ -190,6 +203,39 @@ def _raises(exc):
     def fail(model):
         raise exc
     return fail
+
+
+def test_unreachable_primary_resolve_fallback_walks_the_chain(resolver, caplog):
+    """A transient network failure at resolution walks the chain like an auth error."""
+    import httpx
+    resolver.failing["anthropic"] = _raises(httpx.ConnectError("[Errno 111] Connection refused"))
+    with caplog.at_level(logging.WARNING, logger="tools.delegate_tool"):
+        (route,) = _routes([{"goal": "g"}], {**PRIMARY, "fallback_providers": [BEDROCK]})
+    assert route.error is None and route.creds["provider"] == "bedrock"
+    assert _fallback_warnings(caplog) == ["Primary provider unreachable ([Errno 111] Connection refused). "
+                                          "Falling back to bedrock/global.anthropic.claude-opus-5-5"]
+
+
+RELAY = {"provider": "openrouter", "model": "backup-model", "base_url": "https://relay.example/v1",
+         "key_env": "RELAY_KEY"}
+
+
+@pytest.mark.parametrize("via_profile", [False, True], ids=["route", "profile"])
+def test_entry_endpoint_and_key_resolve_fallback_reach_the_resolver(resolver, monkeypatch, via_profile):
+    """A chain entry resolves with its own base_url and key, never the provider's default endpoint and key."""
+    from hermes_constants import get_hermes_home
+    from tools.delegate_tool_routes import _profile_route
+    resolver.failing["anthropic"] = _exhausted_anthropic
+    monkeypatch.setenv("RELAY_KEY", "relay-key")
+    if via_profile:
+        monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"fallback_providers": [RELAY]})
+        monkeypatch.setattr("tools.delegate_tool_routes._profile_model_request",
+                            lambda cfg: {"target_model": "claude-opus-5-5", "requested": "anthropic"})
+        route = _profile_route(get_hermes_home())
+    else:
+        (route,) = _routes([{"goal": "g"}], {**PRIMARY, "fallback_providers": [RELAY]})
+    assert route.creds["provider"] == "openrouter"
+    assert resolver.explicit[-1] == {"explicit_base_url": "https://relay.example/v1", "explicit_api_key": "relay-key"}
 
 
 def test_all_fail_resolve_fallback_error_names_every_failure(resolver, caplog):
