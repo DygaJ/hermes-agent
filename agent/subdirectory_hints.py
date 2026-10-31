@@ -9,7 +9,7 @@ import logging
 import os
 import shlex
 from pathlib import Path
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Iterable, Optional, Set
 
 from agent.prompt_builder import _read_text_with_timeout, _scan_context_content, _truncate_content
 from agent.search_policy import SEARCH_PRUNE_DIR_NAMES
@@ -133,10 +133,36 @@ def _is_home_like_working_dir(working_dir: Path) -> bool:
     return False
 
 
+def _message_text(content: Any) -> str:
+    """Text of a message body (a string, or a multimodal list of parts)."""
+    if isinstance(content, list):
+        return "\n".join(p["text"] for p in content if isinstance(p, dict) and isinstance(p.get("text"), str))
+    return content if isinstance(content, str) else ""
+
+
+def _live_tool_texts(messages: Iterable[dict]) -> list[str]:
+    """Tool-result texts the next request still sends. The server renders nothing before a Codex native
+    compaction checkpoint (an assistant ``codex_reasoning_items`` list, decoded in live and replayed rows
+    alike) and the request builder drops it from the wire, so only results after the newest one count.
+    ponytail: a checkpoint counts even on a route that is not native-eligible, where the wire still carries
+    the older results; that re-sends a hint (the safe side), and the gate lives in the request builder."""
+    from agent.native_compaction import has_compaction_checkpoint
+
+    texts: list[str] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") == "tool":
+            texts.append(_message_text(m.get("content")))
+        elif m.get("role") == "assistant" and has_compaction_checkpoint(m.get("codex_reasoning_items")):
+            texts.clear()
+    return texts
+
+
 class SubdirectoryHintTracker:
     """Track which directories the agent visits and load hints on first access.
 
-    Usage: after each tool call, ``hints = tracker.check_tool_call(name, args)``
+    Usage: after each tool call, ``hints = tracker.check_tool_call(name, args, messages)``
     and append the returned text to the tool result.
     """
 
@@ -184,8 +210,16 @@ class SubdirectoryHintTracker:
         if found and found[1]:
             self._loaded_digests.add(_digest(found[1]))
 
-    def check_tool_call(self, tool_name: str, tool_args: dict[str, Any]) -> Optional[str]:
-        """Return formatted hint text for newly visited directories, or None."""
+    def check_tool_call(
+        self, tool_name: str, tool_args: dict[str, Any], messages: Optional[Iterable[dict]] = None,
+    ) -> Optional[str]:
+        """Return formatted hint text for newly visited directories, or None.
+
+        ``messages`` is the live conversation the next request sends. The gateway and managed workers build a
+        fresh agent (so a fresh tracker) for a continuing session, and its replayed history still carries the
+        hints an earlier agent sent. A hint whose exact text is still in a live tool result is not sent again.
+        Compaction and prunes take that text out of the list, which re-arms the hint.
+        """
         from agent.safe_worker_policy import safe_worker_enabled
 
         if not self.enabled or safe_worker_enabled():
@@ -193,6 +227,9 @@ class SubdirectoryHintTracker:
         if self._home_is_working_dir:
             return None
         all_hints = [h for d in self._extract_directories(tool_name, tool_args) if (h := self._load_hints_for_directory(d))]
+        if all_hints and messages:
+            texts = _live_tool_texts(messages)
+            all_hints = [h for h in all_hints if not any(h in text for text in texts)]
         return "\n\n" + "\n\n".join(all_hints) if all_hints else None
 
     def _extract_directories(self, tool_name: str, args: dict[str, Any]) -> list:
