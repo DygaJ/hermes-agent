@@ -130,3 +130,23 @@ async def test_admitted_slack_message_delivered_again_after_restart_runs_once_an
     finally:
         runner.session_store.close_all_db_handles()
         authority.db.close()
+
+
+@pytest.mark.asyncio
+async def test_a_conflict_without_the_admitted_request_tag_still_reaches_the_chat():
+    """Only ``ADMITTED_REQUEST_CONFLICT`` proves the id was admitted. Any other ``admission_conflict``
+    (two profile routes that tie, ``session_ingress_context._runtime_profile``) still raises, so the
+    chat gets the turn error and gateway.log the traceback."""
+    from types import SimpleNamespace
+
+    from gateway.config import Platform
+    from gateway.session_ingress import admit_message
+    from hermes_state_runtime import RuntimeStoreError
+
+    async def tied_route(_event):
+        raise RuntimeStoreError("admission_conflict")
+
+    # A ``source`` lets a mutant that drops the field check reach its log line and return None.
+    event = SimpleNamespace(source=SimpleNamespace(platform=Platform.SLACK), message_id=TS)
+    with pytest.raises(RuntimeStoreError, match="admission_conflict"):
+        await admit_message(SimpleNamespace(admit_native=tied_route), event)
