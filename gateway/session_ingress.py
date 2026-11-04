@@ -10,7 +10,7 @@ from gateway.session_envelope import restore_native
 from gateway.session_producer_lifecycle import close_producer_turn, producer_turn
 from hermes_cli.observability.shared_metrics_busy import (
     busy_turn_started, note_busy_admitted, note_busy_parked, settle_busy_arrival)
-from hermes_state_runtime import RuntimeStoreError
+from hermes_state_runtime import ADMITTED_REQUEST_CONFLICT, RuntimeStoreError
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,14 @@ async def admit_message(authority, event):
     except RuntimeStoreError as exc:
         if exc.reason == 'stale_generation' and exc.field == 'route':
             return None  # a later /stop or /new of the chat fenced it, as main cancels a queued row
+        if exc.reason == 'admission_conflict' and exc.field == ADMITTED_REQUEST_CONFLICT['field']:
+            # This message id is already admitted: a redelivery or an edit that reached admission
+            # because a restart emptied the adapter's dedup (a Slack ``message_changed`` keeps the
+            # message's ts). The admitted copy runs or ran; this one never runs, and a turn error
+            # for it would only tell the chat to retry what the gateway already has.
+            logger.info('Dropped a message already admitted with another payload: platform=%s message_id=%s',
+                        event.source.platform.value, event.message_id)
+            return None
         if exc.reason == 'invalid_params' and exc.field:
             # Refused before commit (_validate_native): a refusal notice instead of a generic turn error.
             # The reply reaches the whole chat, so only content clauses are named; trust and provenance
