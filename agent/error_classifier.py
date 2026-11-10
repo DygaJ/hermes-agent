@@ -765,15 +765,17 @@ _ERROR_CODE_VERDICTS: dict[str, Verdict] = {
 
 # Provider-native status codes that arrive as a bare ``{"error": {"code": …}}`` body
 # (no HTTP status, no prose): gRPC canonical names from Gemini, Anthropic error
-# types, OpenAI's ``server_error``. Scoped per provider so a coincidentally named
-# code from another backend stays ``unknown`` (#70414). Provider aliases collapse
-# to the family key before lookup.
+# types, OpenAI's ``server_error``, Bedrock's mid-stream ``serviceUnavailableException``
+# (a botocore ``EventStreamError``: HTTP 200 already sent, so only the code says outage).
+# Scoped per provider so a coincidentally named code from another backend stays
+# ``unknown`` (#70414). Provider aliases collapse to the family key before lookup.
 _PROVIDER_CODE_FAMILIES = {"openai-codex": "openai", "google": "gemini", "google-gemini": "gemini",
                            "google-ai-studio": "gemini", "vertex": "gemini", "google-vertex": "gemini"}
 _PROVIDER_CODE_VERDICTS: dict[str, dict[str, Verdict]] = {
     "openai": {"server_error": _V_SERVER_ERROR},
     "gemini": {"unavailable": _V_OVERLOADED, "deadline_exceeded": _V_TIMEOUT, "internal": _V_SERVER_ERROR},
     "anthropic": {"api_error": _V_SERVER_ERROR, "rate_limit_error": _V_RATE_LIMIT},
+    "bedrock": {"serviceunavailableexception": _V_OVERLOADED},
 }
 
 # Generic ``invalid_request_error`` is deliberately NOT a 400 validation
@@ -803,7 +805,7 @@ class _Ctx:
 
     def __post_init__(self) -> None:
         self.error_type = type(self.error).__name__
-        self.error_code = _extract_error_code(self.body)
+        self.error_code = _extract_error_code(self.body) or _from_cause_chain(self.error, _botocore_error_code, "")
         self.code = self.error_code.lower()
         self.headers = _from_cause_chain(self.error, _headers_of, {})
         self.provider_slug = (self.provider or "").strip().lower()
@@ -1647,6 +1649,15 @@ def _body_of(exc: Any) -> Optional[dict]:
     except Exception:
         return None
     return json_body if isinstance(json_body, dict) else None
+
+
+def _botocore_error_code(exc: Any) -> Optional[str]:
+    """``Error.Code`` from the parsed response dict botocore keeps on ``exc.response``
+    (``ClientError``, ``EventStreamError``); these errors have no ``body`` to read it from."""
+    response = getattr(exc, "response", None)
+    error = response.get("Error") if isinstance(response, dict) else None
+    code = error.get("Code") if isinstance(error, dict) else None
+    return code.strip() or None if isinstance(code, str) else None
 
 
 def _headers_of(exc: Any) -> Any:

@@ -79,7 +79,7 @@ def _settle(agent, err, retry=None):
             patch("agent.turn_api_error.max_retries_exhausted_result", lambda *a, **k: {"failed": True}), \
             patch("agent.turn_api_error.nonretryable_client_error_result", lambda *a, **k: {"failed": True, "nonretryable": True}):
         return settle_unrecovered_error(
-            agent, api_error=err, classified=classified, _retry=retry, status_code=err.status_code,
+            agent, api_error=err, classified=classified, _retry=retry, status_code=getattr(err, "status_code", None),
             error_msg=str(err).lower(), is_context_length_error=False, is_rate_limited=False,
             _is_zai_coding_overload=False, _provider=agent.provider, _base="http://x", _model="m",
             messages=[], api_messages=[], api_kwargs=None, active_system_prompt=None,
