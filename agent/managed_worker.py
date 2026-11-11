@@ -459,6 +459,12 @@ def main():
     if not logger.handlers:
         logger.addHandler(logging.StreamHandler(sys.stderr))
     logger.propagate = False
+    # Platform trust goes in before anything imports a provider SDK. botocore keeps the
+    # ssl.SSLContext it finds at its own import, and a later injection makes every new TLS
+    # context on that class recurse until the stack runs out (#126808). Never raises.
+    from agent.ssl_verify import install_truststore
+
+    install_truststore()
     try:
         channel.send('hello', **hello())
         frame = validate_bootstrap(read_frame(sys.stdin.buffer))
