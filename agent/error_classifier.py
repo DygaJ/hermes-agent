@@ -770,7 +770,8 @@ _ERROR_CODE_VERDICTS: dict[str, Verdict] = {
 # Scoped per provider so a coincidentally named code from another backend stays
 # ``unknown`` (#70414). Provider aliases collapse to the family key before lookup.
 _PROVIDER_CODE_FAMILIES = {"openai-codex": "openai", "google": "gemini", "google-gemini": "gemini",
-                           "google-ai-studio": "gemini", "vertex": "gemini", "google-vertex": "gemini"}
+                           "google-ai-studio": "gemini", "vertex": "gemini", "google-vertex": "gemini",
+                           "aws": "bedrock", "aws-bedrock": "bedrock", "amazon-bedrock": "bedrock", "amazon": "bedrock"}
 _PROVIDER_CODE_VERDICTS: dict[str, dict[str, Verdict]] = {
     "openai": {"server_error": _V_SERVER_ERROR},
     "gemini": {"unavailable": _V_OVERLOADED, "deadline_exceeded": _V_TIMEOUT, "internal": _V_SERVER_ERROR},
@@ -1657,7 +1658,7 @@ def _botocore_error_code(exc: Any) -> Optional[str]:
     response = getattr(exc, "response", None)
     error = response.get("Error") if isinstance(response, dict) else None
     code = error.get("Code") if isinstance(error, dict) else None
-    return code.strip() or None if isinstance(code, str) else None
+    return (code.strip() or None) if isinstance(code, str) else None
 
 
 def _headers_of(exc: Any) -> Any:
