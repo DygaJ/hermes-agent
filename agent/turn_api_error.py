@@ -15,8 +15,8 @@ import ssl
 import time
 from typing import Any, Dict, Optional
 
-from agent.api_error_summary import is_provider_stream_parse_error
-from agent.error_classifier import RETRYABLE_CLIENT_REASONS, FailoverReason, classify_api_error
+from agent.api_error_summary import is_provider_stream_parse_error, provider_stream_frame_code
+from agent.error_classifier import RETRYABLE_CLIENT_REASONS, TRANSIENT_REASONS, FailoverReason, classify_api_error
 from agent.route_verdicts import route_visit
 from agent.turn_overflow import recover_from_overflow
 from agent.turn_recovery import (
@@ -289,7 +289,12 @@ def settle_unrecovered_error(
     # ``FailoverReason.billing`` (402) is deliberately NOT excluded: pool rotation and
     # eager fallback already gave up, so retrying only burns paid requests on a depleted
     # balance. Mirrors 401/403.
-    is_local_validation_error = _is_local_validation_error(api_error)
+    # A provider exception frame the SDK decoder raised as ValueError is the provider's fault, not
+    # a local bug, once the classifier knows its code as transient: retry it like the same outage
+    # on any other transport. A frame with an unmapped code keeps the local-error path.
+    is_local_validation_error = _is_local_validation_error(api_error) and not (
+        classified.reason in TRANSIENT_REASONS and provider_stream_frame_code(api_error) is not None
+    )
     # ``recover_after_classification`` sets ``image_shrink_retry_attempted`` BEFORE it runs the shrink,
     # so an image-size rejection reaching this point with the flag set had nothing left to shrink (the
     # excess is text on a host whose cap is payload-scoped, or an unshrinkable image). Re-sending the

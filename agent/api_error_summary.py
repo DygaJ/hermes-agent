@@ -40,6 +40,25 @@ def is_provider_stream_parse_error(error: BaseException) -> bool:
             and any(marker in str(error).lower() for marker in PROVIDER_STREAM_PARSE_MARKERS))
 
 
+# The Anthropic SDK's Bedrock decoder (``anthropic/lib/bedrock/_stream_decoder.py``) raises a plain
+# ``ValueError("Bad response code, expected 200: {...}")`` for an exception frame inside an open
+# stream. The repr of the frame is the whole message, so the code is read from its
+# ``:exception-type`` header. Only that header is read: the frame's body text may name other codes.
+_STREAM_FRAME_PREFIX = "bad response code, expected 200"
+_STREAM_FRAME_TYPE_RE = re.compile(r"""['"]:exception-type['"]\s*:\s*['"]([^'"]+)['"]""")
+
+
+def provider_stream_frame_code(error: Any) -> Optional[str]:
+    """``:exception-type`` of a provider exception frame the SDK decoder raised as ``ValueError``."""
+    if not isinstance(error, ValueError):
+        return None
+    text = str(error)
+    if not text.lower().startswith(_STREAM_FRAME_PREFIX):
+        return None
+    match = _STREAM_FRAME_TYPE_RE.search(text)
+    return match.group(1) if match else None
+
+
 # Offline DNS failures are wrapped in a generic "Connection error" by SDKs — inspect the chain.
 _NETWORK_RESOLUTION_MARKERS = (
     "temporary failure in name resolution",

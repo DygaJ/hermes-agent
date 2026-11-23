@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, Optional, Sequence
 
+from agent.api_error_summary import provider_stream_frame_code
+
 logger = logging.getLogger(__name__)
 
 # Synthetic code for the OpenAI SDK rejecting a provider's SSE ``data:`` field
@@ -766,7 +768,8 @@ _ERROR_CODE_VERDICTS: dict[str, Verdict] = {
 # Provider-native status codes that arrive as a bare ``{"error": {"code": …}}`` body
 # (no HTTP status, no prose): gRPC canonical names from Gemini, Anthropic error
 # types, OpenAI's ``server_error``, Bedrock's mid-stream ``serviceUnavailableException``
-# (a botocore ``EventStreamError``: HTTP 200 already sent, so only the code says outage).
+# (a botocore ``EventStreamError`` on Converse, the SDK decoder's ``ValueError`` on
+# AnthropicBedrock: HTTP 200 already sent, so only the code says outage).
 # Scoped per provider so a coincidentally named code from another backend stays
 # ``unknown`` (#70414). Provider aliases collapse to the family key before lookup.
 _PROVIDER_CODE_FAMILIES = {"openai-codex": "openai", "google": "gemini", "google-gemini": "gemini",
@@ -806,7 +809,8 @@ class _Ctx:
 
     def __post_init__(self) -> None:
         self.error_type = type(self.error).__name__
-        self.error_code = _extract_error_code(self.body) or _from_cause_chain(self.error, _botocore_error_code, "")
+        self.error_code = (_extract_error_code(self.body) or _from_cause_chain(self.error, _botocore_error_code, "")
+                           or _from_cause_chain(self.error, provider_stream_frame_code, ""))
         self.code = self.error_code.lower()
         self.headers = _from_cause_chain(self.error, _headers_of, {})
         self.provider_slug = (self.provider or "").strip().lower()
