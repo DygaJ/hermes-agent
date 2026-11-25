@@ -15,6 +15,7 @@ from agent.error_classifier import TRANSIENT_REASONS, FailoverReason, classify_a
 from run_agent import AIAgent
 
 _UNAVAILABLE_TEXT = "Bedrock is unable to process your request."
+_INTERNAL_TEXT = "The system encountered an unexpected error during processing. Try your request again."
 
 
 def _frame(exception_type, message=_UNAVAILABLE_TEXT):
@@ -39,6 +40,13 @@ def test_decoder_frame_service_unavailable_is_a_transient_overload(code):
     assert result.reason in TRANSIENT_REASONS
 
 
+def test_decoder_frame_internal_server_error_is_a_retryable_server_error():
+    # Bedrock's own text for this frame says to try the request again.
+    result = _classify(_frame("internalServerException", _INTERNAL_TEXT))
+    assert (result.reason, result.retryable) == (FailoverReason.server_error, True)
+    assert result.reason in TRANSIENT_REASONS
+
+
 @pytest.mark.parametrize("alias", ["aws", "aws-bedrock", "amazon-bedrock", "amazon"])
 def test_a_bedrock_alias_classifies_like_bedrock(alias):
     assert _classify(_frame("serviceUnavailableException"), provider=alias).reason == FailoverReason.overloaded
@@ -51,13 +59,11 @@ def test_the_code_means_overload_for_bedrock_only():
 @pytest.mark.parametrize("code, reason", [
     ("throttlingException", FailoverReason.rate_limit),
     ("validationException", FailoverReason.unknown),
-    ("internalServerException", FailoverReason.unknown),
     ("modelStreamErrorException", FailoverReason.unknown),
     ("modelTimeoutException", FailoverReason.unknown),
 ])
 def test_other_decoder_frame_codes_keep_their_verdict(code, reason):
-    # Only the code seen live is mapped. internalServerException also answers requests that fail
-    # the same way on every retry, so it stays out until a live case shows otherwise.
+    # Only the codes seen live are mapped.
     assert _classify(_frame(code, "x")).reason == reason
 
 
@@ -114,8 +120,11 @@ def _run(agent, side_effect):
         return agent.run_conversation("hello"), api_call, fallback
 
 
-def test_service_unavailable_frame_is_retried_on_the_same_provider(agent):
-    error = _frame("serviceUnavailableException")
+@pytest.mark.parametrize("code, text", [
+    ("serviceUnavailableException", _UNAVAILABLE_TEXT), ("internalServerException", _INTERNAL_TEXT),
+])
+def test_a_transient_frame_is_retried_on_the_same_provider(agent, code, text):
+    error = _frame(code, text)
     result, api_call, fallback = _run(agent, [error, error, _response("Recovered")])
     assert api_call.call_count == 3
     assert fallback.call_count == 0  # the provider keeps its whole retry budget before any switch

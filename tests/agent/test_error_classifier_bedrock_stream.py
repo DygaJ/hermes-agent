@@ -75,7 +75,7 @@ def test_a_bedrock_alias_classifies_like_bedrock(alias):
     ("validationException", "The input is malformed.", FailoverReason.unknown),
     ("someFutureException", "Something new happened.", FailoverReason.unknown),
     ("internalServerException", "The system encountered an unexpected error during processing. Try your request again.",
-     FailoverReason.unknown),
+     FailoverReason.server_error),
     ("modelStreamErrorException", "An error occurred while streaming the response.", FailoverReason.unknown),
 ])
 def test_other_mid_stream_codes_keep_their_verdict(code, message, reason):

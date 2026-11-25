@@ -767,7 +767,8 @@ _ERROR_CODE_VERDICTS: dict[str, Verdict] = {
 
 # Provider-native status codes that arrive as a bare ``{"error": {"code": …}}`` body
 # (no HTTP status, no prose): gRPC canonical names from Gemini, Anthropic error
-# types, OpenAI's ``server_error``, Bedrock's mid-stream ``serviceUnavailableException``
+# types, OpenAI's ``server_error``, Bedrock's mid-stream ``serviceUnavailableException`` and
+# ``internalServerException``
 # (a botocore ``EventStreamError`` on Converse, the SDK decoder's ``ValueError`` on
 # AnthropicBedrock: HTTP 200 already sent, so only the code says outage).
 # Scoped per provider so a coincidentally named code from another backend stays
@@ -779,7 +780,7 @@ _PROVIDER_CODE_VERDICTS: dict[str, dict[str, Verdict]] = {
     "openai": {"server_error": _V_SERVER_ERROR},
     "gemini": {"unavailable": _V_OVERLOADED, "deadline_exceeded": _V_TIMEOUT, "internal": _V_SERVER_ERROR},
     "anthropic": {"api_error": _V_SERVER_ERROR, "rate_limit_error": _V_RATE_LIMIT},
-    "bedrock": {"serviceunavailableexception": _V_OVERLOADED},
+    "bedrock": {"serviceunavailableexception": _V_OVERLOADED, "internalserverexception": _V_SERVER_ERROR},
 }
 
 # Generic ``invalid_request_error`` is deliberately NOT a 400 validation
